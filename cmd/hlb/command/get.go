@@ -63,7 +63,7 @@ var getCommand = &cli.Command{
 		}
 
 		ctx := context.Background()
-		cln, err := solver.BuildkitClient(ctx, c.String("addr"))
+		cln, err := solver.MetatronClient(ctx)
 		if err != nil {
 			return err
 		}
