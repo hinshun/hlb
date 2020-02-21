@@ -18,7 +18,7 @@ import (
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/solver/pb"
 	digest "github.com/opencontainers/go-digest"
-	"github.com/openllb/hlb/ast"
+	"github.com/openllb/hlb/parser"
 	"github.com/openllb/hlb/report"
 	"github.com/openllb/hlb/solver"
 )
@@ -27,17 +27,17 @@ var (
 	ErrDebugExit = errors.New("exiting debugger")
 )
 
-type Debugger func(scope *ast.Scope, node ast.Node, value interface{}) error
+type Debugger func(scope *parser.Scope, node parser.Node, value interface{}) error
 
 func NewNoopDebugger() Debugger {
-	return func(_ *ast.Scope, _ ast.Node, _ interface{}) error {
+	return func(_ *parser.Scope, _ parser.Node, _ interface{}) error {
 		return nil
 	}
 }
 
 type snapshot struct {
-	scope *ast.Scope
-	node  ast.Node
+	scope *parser.Scope
+	node  parser.Node
 	value interface{}
 }
 
@@ -45,9 +45,9 @@ func NewDebugger(ctx context.Context, c *client.Client, w io.Writer, r *bufio.Re
 	color := aurora.NewAurora(true)
 
 	var (
-		root              *ast.AST
-		fun               *ast.FuncDecl
-		next              *ast.FuncDecl
+		file              *parser.File
+		fun               *parser.FuncDecl
+		next              *parser.FuncDecl
 		history           []*snapshot
 		historyIndex      = -1
 		reverseStep       bool
@@ -56,7 +56,7 @@ func NewDebugger(ctx context.Context, c *client.Client, w io.Writer, r *bufio.Re
 		breakpoints       []*Breakpoint
 	)
 
-	return func(scope *ast.Scope, node ast.Node, value interface{}) error {
+	return func(scope *parser.Scope, node parser.Node, value interface{}) error {
 		// Store a snapshot of the current debug step so we can backtrack.
 		historyIndex++
 		history = append(history, &snapshot{scope, node, value})
@@ -66,20 +66,20 @@ func NewDebugger(ctx context.Context, c *client.Client, w io.Writer, r *bufio.Re
 
 			// Keep track of whether we're in global scope or a lexical scope.
 			switch n := s.scope.Node.(type) {
-			case *ast.AST:
+			case *parser.File:
 				// Don't print source code on the first debug section.
 				showList = false
-				root = n
+				file = n
 				if len(staticBreakpoints) == 0 {
-					staticBreakpoints = findStaticBreakpoints(root)
+					staticBreakpoints = findStaticBreakpoints(file)
 					breakpoints = append(breakpoints, staticBreakpoints...)
 				}
-			case *ast.FuncDecl:
+			case *parser.FuncDecl:
 				fun = n
 			}
 
 			switch n := s.node.(type) {
-			case *ast.FuncDecl:
+			case *parser.FuncDecl:
 				for _, bp := range breakpoints {
 					if bp.Call != nil {
 						continue
@@ -88,7 +88,7 @@ func NewDebugger(ctx context.Context, c *client.Client, w io.Writer, r *bufio.Re
 						cont = false
 					}
 				}
-			case *ast.CallStmt:
+			case *parser.CallStmt:
 				for _, bp := range breakpoints {
 					if bp.Call == nil {
 						continue
@@ -144,11 +144,11 @@ func NewDebugger(ctx context.Context, c *client.Client, w io.Writer, r *bufio.Re
 
 					if len(args) == 1 {
 						switch n := s.node.(type) {
-						case *ast.FuncDecl:
+						case *parser.FuncDecl:
 							bp = &Breakpoint{
 								Func: n,
 							}
-						case *ast.CallStmt:
+						case *parser.CallStmt:
 							if report.Contains(report.Debugs, n.Func.Name) {
 								fmt.Fprintf(w, "%s cannot break at breakpoint\n", report.FormatPos(n.Pos))
 								continue
@@ -257,11 +257,11 @@ func NewDebugger(ctx context.Context, c *client.Client, w io.Writer, r *bufio.Re
 				case "exit":
 					return ErrDebugExit
 				case "funcs":
-					for _, obj := range s.scope.Defined(ast.DeclKind) {
+					for _, obj := range s.scope.Defined(parser.DeclKind) {
 						switch n := obj.Node.(type) {
-						case *ast.FuncDecl:
+						case *parser.FuncDecl:
 							fmt.Fprintf(w, "%s\n", n.Name)
-						case *ast.AliasDecl:
+						case *parser.AliasDecl:
 							fmt.Fprintf(w, "%s\n", n.Ident)
 						}
 					}
@@ -345,7 +345,7 @@ func NewDebugger(ctx context.Context, c *client.Client, w io.Writer, r *bufio.Re
 				case "stepout":
 					fmt.Fprintf(w, "unimplemented\n")
 				case "types":
-					for _, typ := range ast.Types {
+					for _, typ := range report.Types {
 						fmt.Fprintf(w, "%s\n", typ)
 					}
 				case "whatis":
@@ -386,7 +386,7 @@ func NewDebugger(ctx context.Context, c *client.Client, w io.Writer, r *bufio.Re
 	}
 }
 
-func printList(color aurora.Aurora, ibs map[string]*report.IndexedBuffer, w io.Writer, node ast.Node) error {
+func printList(color aurora.Aurora, ibs map[string]*report.IndexedBuffer, w io.Writer, node parser.Node) error {
 	pos := node.Position()
 	ib := ibs[pos.Filename]
 
@@ -404,9 +404,9 @@ func printList(color aurora.Aurora, ibs map[string]*report.IndexedBuffer, w io.W
 
 	length := 1
 	switch n := node.(type) {
-	case *ast.FuncDecl:
+	case *parser.FuncDecl:
 		length = n.Name.End().Column - n.Pos.Column
-	case *ast.CallStmt:
+	case *parser.CallStmt:
 		length = n.Func.End().Column - n.Pos.Column
 	}
 
@@ -450,16 +450,16 @@ func printList(color aurora.Aurora, ibs map[string]*report.IndexedBuffer, w io.W
 }
 
 type Breakpoint struct {
-	Func *ast.FuncDecl
-	Call *ast.CallStmt
+	Func *parser.FuncDecl
+	Call *parser.CallStmt
 }
 
-func findStaticBreakpoints(root *ast.AST) []*Breakpoint {
+func findStaticBreakpoints(file *parser.File) []*Breakpoint {
 	var breakpoints []*Breakpoint
 
-	ast.Inspect(root, func(node ast.Node) bool {
+	parser.Inspect(file, func(node parser.Node) bool {
 		switch n := node.(type) {
-		case *ast.FuncDecl:
+		case *parser.FuncDecl:
 			for _, stmt := range n.Body.NonEmptyStmts() {
 				if report.Contains(report.Debugs, stmt.Call.Func.Name) {
 					bp := &Breakpoint{

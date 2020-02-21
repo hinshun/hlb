@@ -6,29 +6,33 @@ import (
 	"io"
 	"os"
 
-	"github.com/moby/buildkit/client"
 	isatty "github.com/mattn/go-isatty"
+	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/client/llb"
-	"github.com/openllb/hlb/ast"
 	"github.com/openllb/hlb/codegen"
+	"github.com/openllb/hlb/parser"
 	"github.com/openllb/hlb/report"
 )
 
-func Compile(ctx context.Context, cln *client.Client, target string, rs []io.Reader, debug bool) (llb.State, *codegen.CodeGenInfo, error) {
+func Compile(ctx context.Context, cln *client.Client, target string, r io.Reader, debug bool) (llb.State, *codegen.CodeGenInfo, error) {
 	st := llb.Scratch()
 
-	files, ibs, err := ParseMultiple(rs, defaultOpts()...)
+	file, ib, err := Parse(r, defaultOpts()...)
 	if err != nil {
 		return st, nil, err
 	}
 
-	root, err := report.SemanticCheck(files...)
+	file, err = report.SemanticCheck(file)
 	if err != nil {
 		return st, nil, err
 	}
 
-	call := &ast.CallStmt{
-		Func: &ast.Ident{Name: target},
+	call := &parser.CallStmt{
+		Func: &parser.Ident{Name: target},
+	}
+
+	ibs := map[string]*report.IndexedBuffer{
+		file.Pos.Filename: ib,
 	}
 
 	var opts []codegen.CodeGenOption
@@ -38,7 +42,7 @@ func Compile(ctx context.Context, cln *client.Client, target string, rs []io.Rea
 		opts = append(opts, codegen.WithDebugger(codegen.NewDebugger(ctx, cln, os.Stderr, r, ibs)))
 	}
 
-	return codegen.Generate(call, root, opts...)
+	return codegen.Generate(call, file, opts...)
 }
 
 func defaultOpts() []ParseOption {

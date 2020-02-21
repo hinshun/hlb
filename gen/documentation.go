@@ -8,7 +8,7 @@ import (
 
 	"github.com/openllb/doxygen-parser/doxygen"
 	"github.com/openllb/hlb"
-	"github.com/openllb/hlb/ast"
+	"github.com/openllb/hlb/parser"
 	"github.com/openllb/hlb/report"
 )
 
@@ -132,7 +132,7 @@ func GenerateDocumentation(r io.Reader) (*Documentation, error) {
 			funcDoc.Doc = strings.TrimSpace(group.Doc)
 		}
 
-		if fun.Type.Type() == ast.Option {
+		if fun.Type.Type() == parser.Option {
 			subtype := string(fun.Type.SubType())
 			optionsByFunc[subtype] = append(optionsByFunc[subtype], funcDoc)
 		}

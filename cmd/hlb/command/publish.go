@@ -3,11 +3,12 @@ package command
 import (
 	"context"
 	"fmt"
-	"strings"
+	"io"
+	"os"
 
 	"github.com/openllb/hlb"
-	"github.com/openllb/hlb/ast"
 	"github.com/openllb/hlb/codegen"
+	"github.com/openllb/hlb/parser"
 	"github.com/openllb/hlb/report"
 	"github.com/openllb/hlb/solver"
 	cli "github.com/urfave/cli/v2"
@@ -34,31 +35,45 @@ var publishCommand = &cli.Command{
 			return fmt.Errorf("--ref must be specified")
 		}
 
-		rs, cleanup, err := collectReaders(c)
+		var r io.Reader
+		if c.NArg() == 0 {
+			fi, err := os.Stdin.Stat()
+			if err != nil {
+				return err
+			}
+
+			if fi.Mode()&os.ModeNamedPipe == 0 {
+				return fmt.Errorf("must provided hlb file or pipe to stdin")
+			}
+
+			r = os.Stdin
+		} else {
+			f, err := os.Open(c.Args().First())
+			if err != nil {
+				return err
+			}
+			r = f
+		}
+
+		file, _, err := hlb.Parse(r, defaultOpts()...)
 		if err != nil {
 			return err
 		}
-		defer cleanup()
 
-		files, _, err := hlb.ParseMultiple(rs, defaultOpts()...)
+		file, err = report.SemanticCheck(file)
 		if err != nil {
 			return err
 		}
 
-		sourceRoot, err := report.SemanticCheck(files...)
-		if err != nil {
-			return err
-		}
-
-		var params []*ast.Field
-		ast.Inspect(sourceRoot, func(node ast.Node) bool {
+		var params []*parser.Field
+		parser.Inspect(file, func(node parser.Node) bool {
 			switch n := node.(type) {
-			case *ast.FuncDecl:
+			case *parser.FuncDecl:
 				if n.Name.Name == c.String("target") {
 					params = n.Params.List
 					return false
 				}
-			case *ast.AliasDecl:
+			case *parser.AliasDecl:
 				if n.Ident.Name == c.String("target") {
 					params = n.Func.Params.List
 					return false
@@ -67,46 +82,41 @@ var publishCommand = &cli.Command{
 			return true
 		})
 
-		frontendStmts := []*ast.Stmt{
-			ast.NewCallStmt("frontendOpt", []*ast.Expr{
-				ast.NewStringExpr("hlb-target"),
-				ast.NewStringExpr(c.String("target")),
+		frontendStmts := []*parser.Stmt{
+			parser.NewCallStmt("frontendOpt", []*parser.Expr{
+				parser.NewStringExpr("hlb-target"),
+				parser.NewStringExpr(c.String("target")),
 			}, nil, nil),
 		}
 		for _, param := range params {
 			fun := "frontendOpt"
-			if param.Type.Type() == ast.Filesystem {
+			if param.Type.Type() == parser.Filesystem {
 				fun = "frontendInput"
 			}
-			frontendStmts = append(frontendStmts, ast.NewCallStmt(fun, []*ast.Expr{
-				ast.NewStringExpr(param.Name.Name),
-				ast.NewIdentExpr(param.Name.Name),
+			frontendStmts = append(frontendStmts, parser.NewCallStmt(fun, []*parser.Expr{
+				parser.NewStringExpr(param.Name.Name),
+				parser.NewIdentExpr(param.Name.Name),
 			}, nil, nil))
 		}
 
-		var sources []string
-		for _, f := range files {
-			sources = append(sources, f.String())
-		}
-
-		signatureHLB := &ast.File{
-			Decls: []*ast.Decl{
+		signatureHLB := &parser.File{
+			Decls: []*parser.Decl{
 				{
-					Func: &ast.FuncDecl{
-						Type: ast.NewType(ast.Filesystem),
-						Name: ast.NewIdent(c.String("target")),
-						Params: &ast.FieldList{
+					Func: &parser.FuncDecl{
+						Type: parser.NewType(parser.Filesystem),
+						Name: parser.NewIdent(c.String("target")),
+						Params: &parser.FieldList{
 							List: params,
 						},
-						Body: &ast.BlockStmt{
-							List: []*ast.Stmt{
-								ast.NewCallStmt("generate", []*ast.Expr{
-									ast.NewBlockLitExpr(ast.Filesystem,
-										ast.NewCallStmt("image", []*ast.Expr{
-											ast.NewStringExpr(c.String("ref")),
+						Body: &parser.BlockStmt{
+							List: []*parser.Stmt{
+								parser.NewCallStmt("generate", []*parser.Expr{
+									parser.NewFuncLitExpr(parser.Filesystem,
+										parser.NewCallStmt("image", []*parser.Expr{
+											parser.NewStringExpr(c.String("ref")),
 										}, nil, nil),
 									),
-								}, ast.NewWithBlockLit(frontendStmts...), nil),
+								}, parser.NewWithFuncLit(frontendStmts...), nil),
 							},
 						},
 					},
@@ -115,27 +125,27 @@ var publishCommand = &cli.Command{
 		}
 
 		entryName := "publish_hlb"
-		publishHLB := &ast.File{
-			Decls: []*ast.Decl{
+		publishHLB := &parser.File{
+			Decls: []*parser.Decl{
 				{
-					Func: &ast.FuncDecl{
-						Type:   ast.NewType(ast.Filesystem),
-						Name:   ast.NewIdent(entryName),
-						Params: &ast.FieldList{},
-						Body: &ast.BlockStmt{
-							List: []*ast.Stmt{
-								ast.NewCallStmt("image", []*ast.Expr{
-									ast.NewStringExpr("openllb/hlb"),
+					Func: &parser.FuncDecl{
+						Type:   parser.NewType(parser.Filesystem),
+						Name:   parser.NewIdent(entryName),
+						Params: &parser.FieldList{},
+						Body: &parser.BlockStmt{
+							List: []*parser.Stmt{
+								parser.NewCallStmt("image", []*parser.Expr{
+									parser.NewStringExpr("openllb/hlb"),
 								}, nil, nil),
-								ast.NewCallStmt("mkfile", []*ast.Expr{
-									ast.NewStringExpr(hlb.SourceHLB),
-									ast.NewNumericExpr(int64(hlb.HLBFileMode), 8),
-									ast.NewStringExpr(strings.Join(sources, "")),
+								parser.NewCallStmt("mkfile", []*parser.Expr{
+									parser.NewStringExpr(hlb.SourceHLB),
+									parser.NewNumericExpr(int64(hlb.HLBFileMode), 8),
+									parser.NewStringExpr(file.String()),
 								}, nil, nil),
-								ast.NewCallStmt("mkfile", []*ast.Expr{
-									ast.NewStringExpr(hlb.SignatureHLB),
-									ast.NewNumericExpr(int64(hlb.HLBFileMode), 8),
-									ast.NewStringExpr(signatureHLB.String()),
+								parser.NewCallStmt("mkfile", []*parser.Expr{
+									parser.NewStringExpr(hlb.SignatureHLB),
+									parser.NewNumericExpr(int64(hlb.HLBFileMode), 8),
+									parser.NewStringExpr(signatureHLB.String()),
 								}, nil, nil),
 							},
 						},
@@ -149,7 +159,7 @@ var publishCommand = &cli.Command{
 			return err
 		}
 
-		st, _, err := codegen.Generate(ast.NewCallStmt(entryName, nil, nil, nil).Call, root)
+		st, _, err := codegen.Generate(parser.NewCallStmt(entryName, nil, nil, nil).Call, root)
 		if err != nil {
 			return err
 		}

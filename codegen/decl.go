@@ -4,12 +4,12 @@ import (
 	"fmt"
 
 	"github.com/moby/buildkit/client/llb"
-	"github.com/openllb/hlb/ast"
+	"github.com/openllb/hlb/parser"
 	"github.com/openllb/hlb/report"
 )
 
-func emitFuncDecl(info *CodeGenInfo, scope *ast.Scope, fun *ast.FuncDecl, call *ast.CallStmt, op string, ac aliasCallback) (interface{}, error) {
-	var args []*ast.Expr
+func emitFuncDecl(info *CodeGenInfo, scope *parser.Scope, fun *parser.FuncDecl, call *parser.CallStmt, op string, ac aliasCallback) (interface{}, error) {
+	var args []*parser.Expr
 	if call != nil {
 		args = call.Args
 	}
@@ -25,11 +25,11 @@ func emitFuncDecl(info *CodeGenInfo, scope *ast.Scope, fun *ast.FuncDecl, call *
 
 	var v interface{}
 	switch fun.Type.Type() {
-	case ast.Filesystem:
+	case parser.Filesystem:
 		v = llb.Scratch()
-	case ast.Option:
+	case parser.Option:
 		v = []interface{}{}
-	case ast.Str:
+	case parser.Str:
 		v = ""
 	}
 
@@ -40,18 +40,18 @@ func emitFuncDecl(info *CodeGenInfo, scope *ast.Scope, fun *ast.FuncDecl, call *
 	}
 
 	switch fun.Type.Type() {
-	case ast.Filesystem:
+	case parser.Filesystem:
 		return emitFilesystemBlock(info, fun.Scope, fun.Body.NonEmptyStmts(), ac)
-	case ast.Option:
+	case parser.Option:
 		return emitOptions(info, fun.Scope, string(fun.Type.SubType()), fun.Body.NonEmptyStmts(), ac)
-	case ast.Str:
+	case parser.Str:
 		return emitStringBlock(info, fun.Scope, fun.Body.NonEmptyStmts())
 	default:
 		return nil, report.ErrInvalidTarget{fun.Name}
 	}
 }
 
-func emitFilesystemFuncDecl(info *CodeGenInfo, scope *ast.Scope, fun *ast.FuncDecl, call *ast.CallStmt, ac aliasCallback) (llb.State, error) {
+func emitFilesystemFuncDecl(info *CodeGenInfo, scope *parser.Scope, fun *parser.FuncDecl, call *parser.CallStmt, ac aliasCallback) (llb.State, error) {
 	v, err := emitFuncDecl(info, scope, fun, call, "", ac)
 	if err != nil {
 		return llb.Scratch(), err
@@ -59,7 +59,7 @@ func emitFilesystemFuncDecl(info *CodeGenInfo, scope *ast.Scope, fun *ast.FuncDe
 	return v.(llb.State), nil
 }
 
-func emitOptionFuncDecl(info *CodeGenInfo, scope *ast.Scope, fun *ast.FuncDecl, call *ast.CallStmt, op string) ([]interface{}, error) {
+func emitOptionFuncDecl(info *CodeGenInfo, scope *parser.Scope, fun *parser.FuncDecl, call *parser.CallStmt, op string) ([]interface{}, error) {
 	v, err := emitFuncDecl(info, scope, fun, call, op, noopAliasCallback)
 	if err != nil {
 		return nil, err
@@ -67,7 +67,7 @@ func emitOptionFuncDecl(info *CodeGenInfo, scope *ast.Scope, fun *ast.FuncDecl, 
 	return v.([]interface{}), nil
 }
 
-func emitStringFuncDecl(info *CodeGenInfo, scope *ast.Scope, fun *ast.FuncDecl, call *ast.CallStmt, ac aliasCallback) (string, error) {
+func emitStringFuncDecl(info *CodeGenInfo, scope *parser.Scope, fun *parser.FuncDecl, call *parser.CallStmt, ac aliasCallback) (string, error) {
 	v, err := emitFuncDecl(info, scope, fun, call, "", ac)
 	if err != nil {
 		return "", err
@@ -75,9 +75,9 @@ func emitStringFuncDecl(info *CodeGenInfo, scope *ast.Scope, fun *ast.FuncDecl, 
 	return v.(string), nil
 }
 
-func emitAliasDecl(info *CodeGenInfo, scope *ast.Scope, alias *ast.AliasDecl, call *ast.CallStmt) (interface{}, error) {
+func emitAliasDecl(info *CodeGenInfo, scope *parser.Scope, alias *parser.AliasDecl, call *parser.CallStmt) (interface{}, error) {
 	var v interface{}
-	_, err := emitFuncDecl(info, scope, alias.Func, call, "", func(aliasCall *ast.CallStmt, aliasValue interface{}) {
+	_, err := emitFuncDecl(info, scope, alias.Func, call, "", func(aliasCall *parser.CallStmt, aliasValue interface{}) {
 		if alias.Call == aliasCall {
 			v = aliasValue
 		}
@@ -89,7 +89,7 @@ func emitAliasDecl(info *CodeGenInfo, scope *ast.Scope, alias *ast.AliasDecl, ca
 	return v, nil
 }
 
-func emitFilesystemAliasDecl(info *CodeGenInfo, scope *ast.Scope, alias *ast.AliasDecl, call *ast.CallStmt) (llb.State, error) {
+func emitFilesystemAliasDecl(info *CodeGenInfo, scope *parser.Scope, alias *parser.AliasDecl, call *parser.CallStmt) (llb.State, error) {
 	v, err := emitAliasDecl(info, scope, alias, call)
 	if err != nil {
 		return llb.Scratch(), err
@@ -97,7 +97,7 @@ func emitFilesystemAliasDecl(info *CodeGenInfo, scope *ast.Scope, alias *ast.Ali
 	return v.(llb.State), nil
 }
 
-func emitStringAliasDecl(info *CodeGenInfo, scope *ast.Scope, alias *ast.AliasDecl, call *ast.CallStmt) (string, error) {
+func emitStringAliasDecl(info *CodeGenInfo, scope *parser.Scope, alias *parser.AliasDecl, call *parser.CallStmt) (string, error) {
 	v, err := emitAliasDecl(info, scope, alias, call)
 	if err != nil {
 		return "", err
@@ -105,7 +105,7 @@ func emitStringAliasDecl(info *CodeGenInfo, scope *ast.Scope, alias *ast.AliasDe
 	return v.(string), nil
 }
 
-func parameterizedScope(info *CodeGenInfo, scope *ast.Scope, call *ast.CallStmt, op string, fun *ast.FuncDecl, args []*ast.Expr, ac aliasCallback) error {
+func parameterizedScope(info *CodeGenInfo, scope *parser.Scope, call *parser.CallStmt, op string, fun *parser.FuncDecl, args []*parser.Expr, ac aliasCallback) error {
 	for i, field := range fun.Params.List {
 		var (
 			data interface{}
@@ -114,23 +114,23 @@ func parameterizedScope(info *CodeGenInfo, scope *ast.Scope, call *ast.CallStmt,
 
 		typ := field.Type.Type()
 		switch typ {
-		case ast.Str:
+		case parser.Str:
 			var v string
 			v, err = emitStringExpr(info, scope, call, args[i])
 			data = v
-		case ast.Int:
+		case parser.Int:
 			var v int
 			v, err = emitIntExpr(info, scope, args[i])
 			data = v
-		case ast.Bool:
+		case parser.Bool:
 			var v bool
 			v, err = emitBoolExpr(info, scope, args[i])
 			data = v
-		case ast.Filesystem:
+		case parser.Filesystem:
 			var v llb.State
 			v, err = emitFilesystemExpr(info, scope, nil, args[i], ac)
 			data = v
-		case ast.Option:
+		case parser.Option:
 			var v []interface{}
 			v, err = emitOptionExpr(info, scope, call, op, args[i])
 			data = v
@@ -139,8 +139,8 @@ func parameterizedScope(info *CodeGenInfo, scope *ast.Scope, call *ast.CallStmt,
 			return err
 		}
 
-		fun.Scope.Insert(&ast.Object{
-			Kind:  ast.ExprKind,
+		fun.Scope.Insert(&parser.Object{
+			Kind:  parser.ExprKind,
 			Ident: field.Name,
 			Node:  field,
 			Data:  data,

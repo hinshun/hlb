@@ -1,4 +1,4 @@
-package ast
+package parser
 
 import (
 	"fmt"
@@ -7,14 +7,6 @@ import (
 
 	"github.com/alecthomas/participle/lexer"
 )
-
-func (ast *AST) String() string {
-	var files []string
-	for _, file := range ast.Files {
-		files = append(files, file.String())
-	}
-	return strings.Join(files, "\n\n")
-}
 
 func (f *File) String() string {
 	doc := ""
@@ -146,8 +138,8 @@ func (e *Expr) String() string {
 		return e.Ident.String()
 	case e.BasicLit != nil:
 		return e.BasicLit.String()
-	case e.BlockLit != nil:
-		return e.BlockLit.String()
+	case e.FuncLit != nil:
+		return e.FuncLit.String()
 	}
 	panic("unknown expr")
 }
@@ -186,7 +178,7 @@ func (l *NumericLit) String() string {
 	panic("unknown numeric lit")
 }
 
-func (l *BlockLit) String() string {
+func (l *FuncLit) String() string {
 	return fmt.Sprintf("%s %s", l.Type, l.Body)
 }
 
@@ -213,7 +205,7 @@ func (s *CallStmt) String() string {
 	}
 
 	withOpt := ""
-	if s.WithOpt != nil && (s.WithOpt.Ident != nil || (s.WithOpt.Ident == nil && s.WithOpt.BlockLit.NumStmts() > 0)) {
+	if s.WithOpt != nil && (s.WithOpt.Ident != nil || (s.WithOpt.Ident == nil && s.WithOpt.FuncLit.NumStmts() > 0)) {
 		withOpt = fmt.Sprintf(" %s", s.WithOpt)
 	}
 
@@ -235,11 +227,7 @@ func (s *CallStmt) String() string {
 }
 
 func (d *AliasDecl) String() string {
-	local := ""
-	if d.Local != nil {
-		local = "local "
-	}
-	return fmt.Sprintf("%s %s%s", d.As, local, d.Ident)
+	return fmt.Sprintf("%s %s", d.As, d.Ident)
 }
 
 func (a *As) String() string {
@@ -250,8 +238,8 @@ func (w *WithOpt) String() string {
 	switch {
 	case w.Ident != nil:
 		return fmt.Sprintf("%s %s", w.With, w.Ident)
-	case w.BlockLit != nil:
-		return fmt.Sprintf("%s %s", w.With, w.BlockLit)
+	case w.FuncLit != nil:
+		return fmt.Sprintf("%s %s", w.With, w.FuncLit)
 	}
 	panic("unknown with opt")
 }

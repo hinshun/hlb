@@ -83,7 +83,7 @@ var runCommand = &cli.Command{
 			return err
 		}
 
-		st, info, err := hlb.Compile(ctx, cln, c.String("target"), []io.Reader{r}, c.Bool("debug"))
+		st, info, err := hlb.Compile(ctx, cln, c.String("target"), r, c.Bool("debug"))
 		if err != nil {
 			// Ignore early exits from the debugger.
 			if err == codegen.ErrDebugExit {

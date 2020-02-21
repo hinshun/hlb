@@ -10,13 +10,14 @@ import (
 
 	"github.com/alecthomas/participle/lexer"
 	"github.com/logrusorgru/aurora"
-	"github.com/openllb/hlb/ast"
+	"github.com/openllb/hlb/parser"
 )
 
 var (
 	Sources = []string{"scratch", "image", "http", "git", "local", "generate"}
 	Ops     = []string{"shell", "run", "env", "dir", "user", "entrypoint", "mkdir", "mkfile", "rm", "copy"}
 	Debugs  = []string{"breakpoint"}
+	Types   = []string{"string", "int", "bool", "fs", "option"}
 
 	CommonOptions   = []string{"no-cache"}
 	ImageOptions    = []string{"resolve"}
@@ -40,11 +41,11 @@ var (
 	Options          = flatMap(ImageOptions, HTTPOptions, GitOptions, RunOptions, SSHOptions, SecretOptions, MountOptions, MkdirOptions, MkfileOptions, RmOptions, CopyOptions)
 	Enums            = flatMap(NetworkModes, SecurityModes, CacheSharingModes)
 	Fields           = flatMap(Sources, Ops, Options)
-	Keywords         = flatMap(ast.Types, Sources, Fields, Enums)
-	ReservedKeywords = flatMap(ast.Types, []string{"with"})
+	Keywords         = flatMap(Types, Sources, Fields, Enums)
+	ReservedKeywords = flatMap(Types, []string{"with"})
 
 	KeywordsWithOptions = []string{"image", "http", "git", "run", "ssh", "secret", "mount", "mkdir", "mkfile", "rm", "copy"}
-	KeywordsWithBlocks  = flatMap(ast.Types, KeywordsWithOptions)
+	KeywordsWithBlocks  = flatMap(Types, KeywordsWithOptions)
 
 	KeywordsByName = map[string][]string{
 		"fs":       Ops,
@@ -66,219 +67,219 @@ var (
 		"cache":    CacheSharingModes,
 	}
 
-	BuiltinSources = map[ast.ObjType][]string{
-		ast.Filesystem: Sources,
-		ast.Str:        []string{"value", "format"},
+	BuiltinSources = map[parser.ObjType][]string{
+		parser.Filesystem: Sources,
+		parser.Str:        []string{"value", "format"},
 	}
 
-	Builtins = map[ast.ObjType]map[string][]*ast.Field{
-		ast.Filesystem: map[string][]*ast.Field{
+	Builtins = map[parser.ObjType]map[string][]*parser.Field{
+		parser.Filesystem: map[string][]*parser.Field{
 			// Debug ops
 			"breakpoint": nil,
 			// Source ops
 			"scratch": nil,
-			"image": []*ast.Field{
-				ast.NewField(ast.Str, "ref", false),
+			"image": []*parser.Field{
+				parser.NewField(parser.Str, "ref", false),
 			},
-			"http": []*ast.Field{
-				ast.NewField(ast.Str, "url", false),
+			"http": []*parser.Field{
+				parser.NewField(parser.Str, "url", false),
 			},
-			"git": []*ast.Field{
-				ast.NewField(ast.Str, "remote", false),
-				ast.NewField(ast.Str, "ref", false),
+			"git": []*parser.Field{
+				parser.NewField(parser.Str, "remote", false),
+				parser.NewField(parser.Str, "ref", false),
 			},
-			"local": []*ast.Field{
-				ast.NewField(ast.Str, "path", false),
+			"local": []*parser.Field{
+				parser.NewField(parser.Str, "path", false),
 			},
-			"generate": []*ast.Field{
-				ast.NewField(ast.Filesystem, "frontend", false),
+			"generate": []*parser.Field{
+				parser.NewField(parser.Filesystem, "frontend", false),
 			},
 			// Ops
-			"shell": []*ast.Field{
-				ast.NewField(ast.Str, "arg", true),
+			"shell": []*parser.Field{
+				parser.NewField(parser.Str, "arg", true),
 			},
-			"run": []*ast.Field{
-				ast.NewField(ast.Str, "arg", true),
+			"run": []*parser.Field{
+				parser.NewField(parser.Str, "arg", true),
 			},
-			"env": []*ast.Field{
-				ast.NewField(ast.Str, "key", false),
-				ast.NewField(ast.Str, "value", false),
+			"env": []*parser.Field{
+				parser.NewField(parser.Str, "key", false),
+				parser.NewField(parser.Str, "value", false),
 			},
-			"dir": []*ast.Field{
-				ast.NewField(ast.Str, "path", false),
+			"dir": []*parser.Field{
+				parser.NewField(parser.Str, "path", false),
 			},
-			"user": []*ast.Field{
-				ast.NewField(ast.Str, "name", false),
+			"user": []*parser.Field{
+				parser.NewField(parser.Str, "name", false),
 			},
-			"entrypoint": []*ast.Field{
-				ast.NewField(ast.Str, "command", true),
+			"entrypoint": []*parser.Field{
+				parser.NewField(parser.Str, "command", true),
 			},
-			"mkdir": []*ast.Field{
-				ast.NewField(ast.Str, "path", false),
-				ast.NewField(ast.Int, "filemode", false),
+			"mkdir": []*parser.Field{
+				parser.NewField(parser.Str, "path", false),
+				parser.NewField(parser.Int, "filemode", false),
 			},
-			"mkfile": []*ast.Field{
-				ast.NewField(ast.Str, "path", false),
-				ast.NewField(ast.Int, "filemode", false),
-				ast.NewField(ast.Str, "content", false),
+			"mkfile": []*parser.Field{
+				parser.NewField(parser.Str, "path", false),
+				parser.NewField(parser.Int, "filemode", false),
+				parser.NewField(parser.Str, "content", false),
 			},
-			"rm": []*ast.Field{
-				ast.NewField(ast.Str, "path", false),
+			"rm": []*parser.Field{
+				parser.NewField(parser.Str, "path", false),
 			},
-			"copy": []*ast.Field{
-				ast.NewField(ast.Filesystem, "input", false),
-				ast.NewField(ast.Str, "src", false),
-				ast.NewField(ast.Str, "dest", false),
+			"copy": []*parser.Field{
+				parser.NewField(parser.Filesystem, "input", false),
+				parser.NewField(parser.Str, "src", false),
+				parser.NewField(parser.Str, "dest", false),
 			},
 		},
-		ast.Str: map[string][]*ast.Field{
-			"value": []*ast.Field{
-				ast.NewField(ast.Str, "literal", false),
+		parser.Str: map[string][]*parser.Field{
+			"value": []*parser.Field{
+				parser.NewField(parser.Str, "literal", false),
 			},
-			"format": []*ast.Field{
-				ast.NewField(ast.Str, "format", false),
-				ast.NewField(ast.Str, "values", true),
+			"format": []*parser.Field{
+				parser.NewField(parser.Str, "format", false),
+				parser.NewField(parser.Str, "values", true),
 			},
 		},
 		// Common options
-		ast.Option: map[string][]*ast.Field{
+		parser.Option: map[string][]*parser.Field{
 			"no-cache": nil,
 		},
-		ast.OptionImage: map[string][]*ast.Field{
+		parser.OptionImage: map[string][]*parser.Field{
 			"resolve": nil,
 		},
-		ast.OptionHTTP: map[string][]*ast.Field{
-			"checksum": []*ast.Field{
-				ast.NewField(ast.Str, "digest", false),
+		parser.OptionHTTP: map[string][]*parser.Field{
+			"checksum": []*parser.Field{
+				parser.NewField(parser.Str, "digest", false),
 			},
-			"chmod": []*ast.Field{
-				ast.NewField(ast.Int, "filemode", false),
+			"chmod": []*parser.Field{
+				parser.NewField(parser.Int, "filemode", false),
 			},
-			"filename": []*ast.Field{
-				ast.NewField(ast.Str, "name", false),
+			"filename": []*parser.Field{
+				parser.NewField(parser.Str, "name", false),
 			},
 		},
-		ast.OptionGit: map[string][]*ast.Field{
+		parser.OptionGit: map[string][]*parser.Field{
 			"keepGitDir": nil,
 		},
-		ast.OptionLocal: map[string][]*ast.Field{
-			"includePatterns": []*ast.Field{
-				ast.NewField(ast.Str, "patterns", true),
+		parser.OptionLocal: map[string][]*parser.Field{
+			"includePatterns": []*parser.Field{
+				parser.NewField(parser.Str, "patterns", true),
 			},
-			"excludePatterns": []*ast.Field{
-				ast.NewField(ast.Str, "patterns", true),
+			"excludePatterns": []*parser.Field{
+				parser.NewField(parser.Str, "patterns", true),
 			},
-			"followPaths": []*ast.Field{
-				ast.NewField(ast.Str, "paths", true),
-			},
-		},
-		ast.OptionGenerate: map[string][]*ast.Field{
-			"frontendInput": []*ast.Field{
-				ast.NewField(ast.Str, "key", false),
-				ast.NewField(ast.Filesystem, "value", false),
-			},
-			"frontendOpt": []*ast.Field{
-				ast.NewField(ast.Str, "key", false),
-				ast.NewField(ast.Str, "value", false),
+			"followPaths": []*parser.Field{
+				parser.NewField(parser.Str, "paths", true),
 			},
 		},
-		ast.OptionRun: map[string][]*ast.Field{
+		parser.OptionGenerate: map[string][]*parser.Field{
+			"frontendInput": []*parser.Field{
+				parser.NewField(parser.Str, "key", false),
+				parser.NewField(parser.Filesystem, "value", false),
+			},
+			"frontendOpt": []*parser.Field{
+				parser.NewField(parser.Str, "key", false),
+				parser.NewField(parser.Str, "value", false),
+			},
+		},
+		parser.OptionRun: map[string][]*parser.Field{
 			"readonlyRootfs": nil,
-			"env": []*ast.Field{
-				ast.NewField(ast.Str, "key", false),
-				ast.NewField(ast.Str, "value", false),
+			"env": []*parser.Field{
+				parser.NewField(parser.Str, "key", false),
+				parser.NewField(parser.Str, "value", false),
 			},
-			"dir": []*ast.Field{
-				ast.NewField(ast.Str, "path", false),
+			"dir": []*parser.Field{
+				parser.NewField(parser.Str, "path", false),
 			},
-			"user": []*ast.Field{
-				ast.NewField(ast.Str, "name", false),
+			"user": []*parser.Field{
+				parser.NewField(parser.Str, "name", false),
 			},
-			"network": []*ast.Field{
-				ast.NewField(ast.Str, "networkmode", false),
+			"network": []*parser.Field{
+				parser.NewField(parser.Str, "networkmode", false),
 			},
-			"security": []*ast.Field{
-				ast.NewField(ast.Str, "securitymode", false),
+			"security": []*parser.Field{
+				parser.NewField(parser.Str, "securitymode", false),
 			},
-			"host": []*ast.Field{
-				ast.NewField(ast.Str, "hostname", false),
-				ast.NewField(ast.Str, "address", false),
+			"host": []*parser.Field{
+				parser.NewField(parser.Str, "hostname", false),
+				parser.NewField(parser.Str, "address", false),
 			},
 			"ssh": nil,
-			"secret": []*ast.Field{
-				ast.NewField(ast.Str, "mountpoint", false),
+			"secret": []*parser.Field{
+				parser.NewField(parser.Str, "mountpoint", false),
 			},
-			"mount": []*ast.Field{
-				ast.NewField(ast.Filesystem, "input", false),
-				ast.NewField(ast.Str, "mountpoint", false),
+			"mount": []*parser.Field{
+				parser.NewField(parser.Filesystem, "input", false),
+				parser.NewField(parser.Str, "mountpoint", false),
 			},
 		},
-		ast.OptionSSH: map[string][]*ast.Field{
-			"target": []*ast.Field{
-				ast.NewField(ast.Str, "path", false),
+		parser.OptionSSH: map[string][]*parser.Field{
+			"target": []*parser.Field{
+				parser.NewField(parser.Str, "path", false),
 			},
-			"id": []*ast.Field{
-				ast.NewField(ast.Str, "cacheid", false),
+			"id": []*parser.Field{
+				parser.NewField(parser.Str, "cacheid", false),
 			},
-			"uid": []*ast.Field{
-				ast.NewField(ast.Int, "value", false),
+			"uid": []*parser.Field{
+				parser.NewField(parser.Int, "value", false),
 			},
-			"gid": []*ast.Field{
-				ast.NewField(ast.Int, "value", false),
+			"gid": []*parser.Field{
+				parser.NewField(parser.Int, "value", false),
 			},
-			"mode": []*ast.Field{
-				ast.NewField(ast.Int, "filemode", false),
+			"mode": []*parser.Field{
+				parser.NewField(parser.Int, "filemode", false),
 			},
 			"optional": nil,
 		},
-		ast.OptionSecret: map[string][]*ast.Field{
-			"id": []*ast.Field{
-				ast.NewField(ast.Str, "cacheid", false),
+		parser.OptionSecret: map[string][]*parser.Field{
+			"id": []*parser.Field{
+				parser.NewField(parser.Str, "cacheid", false),
 			},
-			"uid": []*ast.Field{
-				ast.NewField(ast.Int, "value", false),
+			"uid": []*parser.Field{
+				parser.NewField(parser.Int, "value", false),
 			},
-			"gid": []*ast.Field{
-				ast.NewField(ast.Int, "value", false),
+			"gid": []*parser.Field{
+				parser.NewField(parser.Int, "value", false),
 			},
-			"mode": []*ast.Field{
-				ast.NewField(ast.Int, "filemode", false),
+			"mode": []*parser.Field{
+				parser.NewField(parser.Int, "filemode", false),
 			},
 			"optional": nil,
 		},
-		ast.OptionMount: map[string][]*ast.Field{
+		parser.OptionMount: map[string][]*parser.Field{
 			"readonly": nil,
 			"tmpfs":    nil,
-			"sourcePath": []*ast.Field{
-				ast.NewField(ast.Str, "path", false),
+			"sourcePath": []*parser.Field{
+				parser.NewField(parser.Str, "path", false),
 			},
-			"cache": []*ast.Field{
-				ast.NewField(ast.Str, "cacheid", false),
-				ast.NewField(ast.Str, "cachemode", false),
+			"cache": []*parser.Field{
+				parser.NewField(parser.Str, "cacheid", false),
+				parser.NewField(parser.Str, "cachemode", false),
 			},
 		},
-		ast.OptionMkdir: map[string][]*ast.Field{
+		parser.OptionMkdir: map[string][]*parser.Field{
 			"createParents": nil,
-			"chown": []*ast.Field{
-				ast.NewField(ast.Str, "owner", false),
+			"chown": []*parser.Field{
+				parser.NewField(parser.Str, "owner", false),
 			},
-			"createdTime": []*ast.Field{
-				ast.NewField(ast.Str, "created", false),
-			},
-		},
-		ast.OptionMkfile: map[string][]*ast.Field{
-			"chown": []*ast.Field{
-				ast.NewField(ast.Str, "owner", false),
-			},
-			"createdTime": []*ast.Field{
-				ast.NewField(ast.Str, "created", false),
+			"createdTime": []*parser.Field{
+				parser.NewField(parser.Str, "created", false),
 			},
 		},
-		ast.OptionRm: map[string][]*ast.Field{
+		parser.OptionMkfile: map[string][]*parser.Field{
+			"chown": []*parser.Field{
+				parser.NewField(parser.Str, "owner", false),
+			},
+			"createdTime": []*parser.Field{
+				parser.NewField(parser.Str, "created", false),
+			},
+		},
+		parser.OptionRm: map[string][]*parser.Field{
 			"allowNotFound":  nil,
 			"allowWildcards": nil,
 		},
-		ast.OptionCopy: map[string][]*ast.Field{
+		parser.OptionCopy: map[string][]*parser.Field{
 			"followSymlinks": nil,
 			"contentsOnly":   nil,
 			"unpack":         nil,
@@ -302,7 +303,7 @@ func flatMap(arrays ...[]string) []string {
 	return flat
 }
 
-func keys(m map[string][]*ast.Field) []string {
+func keys(m map[string][]*parser.Field) []string {
 	var keys []string
 	for key := range m {
 		keys = append(keys, key)

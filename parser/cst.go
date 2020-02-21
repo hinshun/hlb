@@ -1,15 +1,44 @@
-package ast
+package parser
 
 import (
 	"fmt"
 	"strconv"
 	"strings"
 
+	"github.com/alecthomas/participle"
 	"github.com/alecthomas/participle/lexer"
+	"github.com/alecthomas/participle/lexer/regex"
 )
 
-// Node is implemented by all nodes in the AST.
+var (
+	// Lexer lexes HLB into tokens for the parser.
+	Lexer = lexer.Must(regex.New(fmt.Sprintf(`
+	        whitespace = [\r\t ]+
+
+		Keyword  = \b(with|as|variadic)\b
+		Type     = \b(string|int|bool|fs|option)(::[a-z][a-z]*)?\b
+		Numeric  = \b(0(b|B|o|O|x|X)[a-fA-F0-9]+)\b
+		Decimal  = \b(0|[1-9][0-9]*)\b
+		String   = "(\\.|[^"])*"|'[^']*'
+		Bool     = \b(true|false)\b
+		Ident    = \b[a-zA-Z_][a-zA-Z0-9_]*\b
+	        Newline  = \n
+		Operator = {|}|\(|\)|,|;
+	        Comment  = #[^\n]*\n
+	        Bad      = .*
+	`)))
+
+	// Parser parses HLB into a concrete syntax tree rooted from a File.
+	Parser = participle.MustBuild(
+		&File{},
+		participle.Lexer(Lexer),
+		participle.Unquote(),
+	)
+)
+
+// Node is implemented by all nodes in the CST.
 type Node interface {
+	// Stringer is implemented to unparse a node back into formatted HLB.
 	fmt.Stringer
 
 	// Position returns position of the first character belonging to the node.
@@ -19,32 +48,14 @@ type Node interface {
 	End() lexer.Position
 }
 
-// AST represents the abstract syntax tree.
-type AST struct {
-	Scope *Scope
-	Files []*File
-}
-
-// NewAST builds a new AST for the given files.
-func NewAST(files ...*File) *AST {
-	root := &AST{
-		Files: files,
-	}
-	root.Scope = NewScope(root, nil)
-	return root
-}
-
-func (ast *AST) Position() lexer.Position { return lexer.Position{} }
-func (ast *AST) End() lexer.Position {
-	if len(ast.Files) == 0 {
-		return lexer.Position{}
-	}
-	return ast.Files[len(ast.Files)-1].End()
-}
-
 // File represents a HLB source file.
+//
+// Initially, the Parser will fill in this struct as a parse tree / concrete
+// syntax tree, but a second pass from the Analyzer will type check and fill in
+// fields without parser struct tags like scopes and doc linking.
 type File struct {
 	Pos   lexer.Position
+	Scope *Scope
 	Doc   *CommentGroup
 	Decls []*Decl `( @@ )*`
 }
@@ -64,7 +75,10 @@ func (f *File) End() lexer.Position {
 // Decl represents a declaration node.
 type Decl struct {
 	Pos     lexer.Position
-	Func    *FuncDecl     `( @@`
+	Bad     *BadDecl      `( @@`
+	Import  *ImportDecl   `| @@`
+	Export  *ExportDecl   `| @@`
+	Func    *FuncDecl     `| @@`
 	Newline *Newline      `| @@`
 	Doc     *CommentGroup `| @@ )`
 }
@@ -72,6 +86,12 @@ type Decl struct {
 func (d *Decl) Position() lexer.Position { return d.Pos }
 func (d *Decl) End() lexer.Position {
 	switch {
+	case d.Bad != nil:
+		return d.Bad.End()
+	case d.Import != nil:
+		return d.Import.End()
+	case d.Export != nil:
+		return d.Export.End()
 	case d.Func != nil:
 		return d.Func.End()
 	case d.Newline != nil:
@@ -83,11 +103,39 @@ func (d *Decl) End() lexer.Position {
 	}
 }
 
+// BadDecl represents a declaration containing errors.
+type BadDecl struct {
+	Pos lexer.Position
+	Bad string `@Bad`
+}
+
+func (d *BadDecl) Position() lexer.Position { return d.Pos }
+func (d *BadDecl) End() lexer.Position      { return shiftPosition(d.Pos, len(d.Bad), 0) }
+
+// ImportDecl represents an import declaration.
+type ImportDecl struct {
+	Pos    lexer.Position
+	Ident  *Ident   `"import" @@`
+	Import *FuncLit `"from" @@`
+}
+
+func (d *ImportDecl) Position() lexer.Position { return d.Pos }
+func (d *ImportDecl) End() lexer.Position      { return d.Import.End() }
+
+// ExportDecl represents an export declaration.
+type ExportDecl struct {
+	Pos   lexer.Position
+	Ident *Ident `"export" @@`
+}
+
+func (d *ExportDecl) Position() lexer.Position { return d.Pos }
+func (d *ExportDecl) End() lexer.Position      { return d.Ident.End() }
+
 // FuncDecl represents a function declaration.
 type FuncDecl struct {
 	Pos    lexer.Position
-	Doc    *CommentGroup
-	Scope  *Scope
+	Scope *Scope
+	Doc *CommentGroup
 	Type   *Type      `@@`
 	Method *Method    `( @@ )?`
 	Name   *Ident     `@@`
@@ -112,7 +160,7 @@ func (m *Method) End() lexer.Position      { return m.CloseParen.End() }
 type FieldList struct {
 	Pos        lexer.Position
 	OpenParen  *OpenParen  `@@`
-	List       []*Field    `( @@ ( ","  @@ )* )?`
+	List       []*Field    `( ( Newline )? @@ ( "," ( Newline )?  @@ )* ( "," Newline )? )?`
 	CloseParen *CloseParen `@@`
 }
 
@@ -162,7 +210,7 @@ type Expr struct {
 	Pos      lexer.Position
 	Ident    *Ident    `( @@`
 	BasicLit *BasicLit `| @@`
-	BlockLit *BlockLit `| @@ )`
+	FuncLit  *FuncLit  `| @@ )`
 }
 
 func (e *Expr) Position() lexer.Position { return e.Pos }
@@ -172,8 +220,8 @@ func (e *Expr) End() lexer.Position {
 		return e.Ident.End()
 	case e.BasicLit != nil:
 		return e.BasicLit.End()
-	case e.BlockLit != nil:
-		return e.BlockLit.End()
+	case e.FuncLit != nil:
+		return e.FuncLit.End()
 	default:
 		return shiftPosition(e.Pos, 1, 0)
 	}
@@ -351,26 +399,26 @@ func NewBoolExpr(v bool) *Expr {
 	}
 }
 
-// BlockLit represents a literal block prefixed by its type. If the type is
+// FuncLit represents a literal block prefixed by its type. If the type is
 // missing then it's assumed to be a fs block literal.
-type BlockLit struct {
+type FuncLit struct {
 	Pos  lexer.Position
 	Type *Type      `@@`
 	Body *BlockStmt `@@`
 }
 
-func (l *BlockLit) Position() lexer.Position { return l.Pos }
-func (l *BlockLit) End() lexer.Position      { return l.Body.End() }
+func (l *FuncLit) Position() lexer.Position { return l.Pos }
+func (l *FuncLit) End() lexer.Position      { return l.Body.End() }
 
-func (l *BlockLit) NumStmts() int {
+func (l *FuncLit) NumStmts() int {
 	if l == nil {
 		return 0
 	}
 	return l.Body.NumStmts()
 }
 
-func NewBlockLit(typ ObjType, stmts ...*Stmt) *BlockLit {
-	return &BlockLit{
+func NewFuncLit(typ ObjType, stmts ...*Stmt) *FuncLit {
+	return &FuncLit{
 		Type: NewType(typ),
 		Body: &BlockStmt{
 			List: stmts,
@@ -378,9 +426,9 @@ func NewBlockLit(typ ObjType, stmts ...*Stmt) *BlockLit {
 	}
 }
 
-func NewBlockLitExpr(typ ObjType, stmts ...*Stmt) *Expr {
+func NewFuncLitExpr(typ ObjType, stmts ...*Stmt) *Expr {
 	return &Expr{
-		BlockLit: NewBlockLit(typ, stmts...),
+		FuncLit: NewFuncLit(typ, stmts...),
 	}
 }
 
@@ -434,10 +482,10 @@ func NewCallStmt(name string, args []*Expr, withOpt *WithOpt, alias *AliasDecl) 
 
 // WithOpt represents optional arguments for a CallStmt.
 type WithOpt struct {
-	Pos      lexer.Position
-	With     *With     `@@`
-	Ident    *Ident    `( @@`
-	BlockLit *BlockLit `| @@ )`
+	Pos     lexer.Position
+	With    *With    `@@`
+	Ident   *Ident   `( @@`
+	FuncLit *FuncLit `| @@ )`
 }
 
 func (w *WithOpt) Position() lexer.Position { return w.Pos }
@@ -445,8 +493,8 @@ func (w *WithOpt) End() lexer.Position {
 	switch {
 	case w.Ident != nil:
 		return w.Ident.End()
-	case w.BlockLit != nil:
-		return w.BlockLit.End()
+	case w.FuncLit != nil:
+		return w.FuncLit.End()
 	default:
 		return shiftPosition(w.Pos, 1, 0)
 	}
@@ -459,10 +507,10 @@ func NewWithIdent(name string) *WithOpt {
 	}
 }
 
-func NewWithBlockLit(stmts ...*Stmt) *WithOpt {
+func NewWithFuncLit(stmts ...*Stmt) *WithOpt {
 	return &WithOpt{
-		With:     &With{Keyword: "with"},
-		BlockLit: NewBlockLit(Option, stmts...),
+		With:    &With{Keyword: "with"},
+		FuncLit: NewFuncLit(Option, stmts...),
 	}
 }
 
@@ -478,9 +526,8 @@ func (w *With) End() lexer.Position      { return shiftPosition(w.Pos, len(w.Key
 // AliasDecl represents a declaration of an alias for a CallStmt.
 type AliasDecl struct {
 	Pos   lexer.Position
-	As    *As     `@@`
-	Local *string `( @"local" )?`
-	Ident *Ident  `@@`
+	As    *As    `@@`
+	Ident *Ident `@@`
 	Func  *FuncDecl
 	Call  *CallStmt
 }

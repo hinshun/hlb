@@ -3,32 +3,30 @@ package report
 import (
 	"fmt"
 
-	"github.com/openllb/hlb/ast"
+	"github.com/openllb/hlb/parser"
 )
 
-func LinkDocs(file *ast.File) {
-	root := ast.NewAST(file)
-
+func LinkDocs(file *parser.File) {
 	var (
-		lastCG *ast.CommentGroup
+		lastCG *parser.CommentGroup
 	)
 
-	ast.Inspect(root, func(node ast.Node) bool {
+	parser.Inspect(file, func(node parser.Node) bool {
 		switch n := node.(type) {
-		case *ast.Decl:
+		case *parser.Decl:
 			if n.Doc != nil {
 				lastCG = n.Doc
 			}
-		case *ast.FuncDecl:
+		case *parser.FuncDecl:
 			if lastCG != nil && lastCG.End().Line == n.Pos.Line-1 {
 				n.Doc = lastCG
 			}
 
-			ast.Inspect(n, func(node ast.Node) bool {
+			parser.Inspect(n, func(node parser.Node) bool {
 				switch n := node.(type) {
-				case *ast.CommentGroup:
+				case *parser.CommentGroup:
 					lastCG = n
-				case *ast.CallStmt:
+				case *parser.CallStmt:
 					if lastCG != nil && lastCG.End().Line == n.Pos.Line-1 {
 						n.Doc = lastCG
 					}
@@ -40,20 +38,19 @@ func LinkDocs(file *ast.File) {
 	})
 }
 
-func SemanticCheck(files ...*ast.File) (*ast.AST, error) {
-	root := ast.NewAST(files...)
-
+func SemanticCheck(file *parser.File) (*parser.File, error) {
 	var (
-		dupDecls []*ast.Ident
+		dupDecls []*parser.Ident
 	)
 
-	ast.Inspect(root, func(node ast.Node) bool {
+	file.Scope = parser.NewScope(file, nil)
+	parser.Inspect(file, func(node parser.Node) bool {
 		switch n := node.(type) {
-		case *ast.FuncDecl:
+		case *parser.FuncDecl:
 			fun := n
 
 			if fun.Name != nil {
-				obj := root.Scope.Lookup(fun.Name.Name)
+				obj := file.Scope.Lookup(fun.Name.Name)
 				if obj != nil {
 					if len(dupDecls) == 0 {
 						dupDecls = append(dupDecls, obj.Ident)
@@ -62,28 +59,28 @@ func SemanticCheck(files ...*ast.File) (*ast.AST, error) {
 					return false
 				}
 
-				root.Scope.Insert(&ast.Object{
-					Kind:  ast.DeclKind,
+				file.Scope.Insert(&parser.Object{
+					Kind:  parser.DeclKind,
 					Ident: fun.Name,
 					Node:  fun,
 				})
 			}
 
-			fun.Scope = ast.NewScope(fun, root.Scope)
+			fun.Scope = parser.NewScope(fun, file.Scope)
 
 			if fun.Params != nil {
 				for _, param := range fun.Params.List {
-					fun.Scope.Insert(&ast.Object{
-						Kind:  ast.FieldKind,
+					fun.Scope.Insert(&parser.Object{
+						Kind:  parser.FieldKind,
 						Ident: param.Name,
 						Node:  param,
 					})
 				}
 			}
 
-			ast.Inspect(fun, func(node ast.Node) bool {
+			parser.Inspect(fun, func(node parser.Node) bool {
 				switch n := node.(type) {
-				case *ast.CallStmt:
+				case *parser.CallStmt:
 					if n.Alias == nil {
 						return true
 					}
@@ -91,14 +88,9 @@ func SemanticCheck(files ...*ast.File) (*ast.AST, error) {
 					n.Alias.Func = fun
 					n.Alias.Call = n
 
-					// Local aliases are inserted into the scope at compile time.
-					if n.Alias.Local != nil {
-						return true
-					}
-
 					if n.Alias.Ident != nil {
-						root.Scope.Insert(&ast.Object{
-							Kind:  ast.DeclKind,
+						file.Scope.Insert(&parser.Object{
+							Kind:  parser.DeclKind,
 							Ident: n.Alias.Ident,
 							Node:  n.Alias,
 						})
@@ -110,12 +102,12 @@ func SemanticCheck(files ...*ast.File) (*ast.AST, error) {
 		return true
 	})
 	if len(dupDecls) > 0 {
-		return root, ErrDuplicateDecls{dupDecls}
+		return file, ErrDuplicateDecls{dupDecls}
 	}
 
 	var errs []error
-	ast.Inspect(root, func(n ast.Node) bool {
-		fun, ok := n.(*ast.FuncDecl)
+	parser.Inspect(file, func(n parser.Node) bool {
+		fun, ok := n.(*parser.FuncDecl)
 		if !ok {
 			return true
 		}
@@ -130,7 +122,7 @@ func SemanticCheck(files ...*ast.File) (*ast.AST, error) {
 
 		if fun.Type != nil && fun.Body != nil {
 			var op string
-			if fun.Type.Type() == ast.Option {
+			if fun.Type.Type() == parser.Option {
 				op = string(fun.Type.SubType())
 			}
 
@@ -144,16 +136,16 @@ func SemanticCheck(files ...*ast.File) (*ast.AST, error) {
 		return true
 	})
 	if len(errs) > 0 {
-		return root, ErrSemantic{errs}
+		return file, ErrSemantic{errs}
 	}
 
-	return root, nil
+	return file, nil
 }
 
-func checkFieldList(fields []*ast.Field) error {
-	var dupFields []*ast.Field
+func checkFieldList(fields []*parser.Field) error {
+	var dupFields []*parser.Field
 
-	fieldSet := make(map[string]*ast.Field)
+	fieldSet := make(map[string]*parser.Field)
 	for _, field := range fields {
 		if field.Name == nil {
 			continue
@@ -178,8 +170,8 @@ func checkFieldList(fields []*ast.Field) error {
 	return nil
 }
 
-func checkBlockStmt(scope *ast.Scope, typ *ast.Type, block *ast.BlockStmt, op string) error {
-	if typ.Equals(ast.Option) {
+func checkBlockStmt(scope *parser.Scope, typ *parser.Type, block *parser.BlockStmt, op string) error {
+	if typ.Equals(parser.Option) {
 		return checkOptionBlockStmt(scope, typ, block, op)
 	}
 
@@ -205,17 +197,17 @@ func checkBlockStmt(scope *ast.Scope, typ *ast.Type, block *ast.BlockStmt, op st
 					return ErrFirstSource{call}
 				}
 
-				var callType *ast.Type
+				var callType *parser.Type
 				switch obj.Kind {
-				case ast.DeclKind:
+				case parser.DeclKind:
 					switch n := obj.Node.(type) {
-					case *ast.FuncDecl:
+					case *parser.FuncDecl:
 						callType = n.Type
-					case *ast.AliasDecl:
+					case *parser.AliasDecl:
 						callType = n.Func.Type
 					}
-				case ast.FieldKind:
-					field, ok := obj.Node.(*ast.Field)
+				case parser.FieldKind:
+					field, ok := obj.Node.(*parser.Field)
 					if ok {
 						callType = field.Type
 					}
@@ -247,14 +239,14 @@ func checkBlockStmt(scope *ast.Scope, typ *ast.Type, block *ast.BlockStmt, op st
 	return nil
 }
 
-func checkCallStmt(scope *ast.Scope, typ *ast.Type, index int, call *ast.CallStmt, op string) error {
+func checkCallStmt(scope *parser.Scope, typ *parser.Type, index int, call *parser.CallStmt, op string) error {
 	var (
 		funcs  []string
-		params []*ast.Field
+		params []*parser.Field
 	)
 
 	switch typ.Type() {
-	case ast.Filesystem, ast.Str:
+	case parser.Filesystem, parser.Str:
 		if index == 0 {
 			funcs = flatMap(BuiltinSources[typ.Type()], Debugs)
 		} else {
@@ -262,8 +254,8 @@ func checkCallStmt(scope *ast.Scope, typ *ast.Type, index int, call *ast.CallStm
 		}
 		builtins := Builtins[typ.Type()][call.Func.Name]
 		params = handleVariadicParams(builtins, call.Args)
-	case ast.Option:
-		optionType := ast.ObjType(fmt.Sprintf("%s::%s", ast.Option, op))
+	case parser.Option:
+		optionType := parser.ObjType(fmt.Sprintf("%s::%s", parser.Option, op))
 		funcs = KeywordsByName[op]
 		builtins := Builtins[optionType][call.Func.Name]
 		params = handleVariadicParams(builtins, call.Args)
@@ -275,12 +267,12 @@ func checkCallStmt(scope *ast.Scope, typ *ast.Type, index int, call *ast.CallStm
 			return ErrInvalidFunc{call}
 		}
 
-		var fields []*ast.Field
-		if obj.Kind == ast.DeclKind {
+		var fields []*parser.Field
+		if obj.Kind == parser.DeclKind {
 			switch n := obj.Node.(type) {
-			case *ast.FuncDecl:
+			case *parser.FuncDecl:
 				fields = n.Params.List
-			case *ast.AliasDecl:
+			case *parser.AliasDecl:
 				fields = n.Func.Params.List
 			default:
 				panic("unknown decl object")
@@ -303,8 +295,8 @@ func checkCallStmt(scope *ast.Scope, typ *ast.Type, index int, call *ast.CallStm
 		case arg.BasicLit != nil:
 			err = checkBasicLitArg(typ.Type(), arg.BasicLit)
 
-		case arg.BlockLit != nil:
-			err = checkBlockLitArg(scope, typ.Type(), arg.BlockLit, call.Func.Name)
+		case arg.FuncLit != nil:
+			err = checkFuncLitArg(scope, typ.Type(), arg.FuncLit, call.Func.Name)
 		default:
 			panic("unknown field type")
 		}
@@ -317,9 +309,9 @@ func checkCallStmt(scope *ast.Scope, typ *ast.Type, index int, call *ast.CallStm
 		var err error
 		switch {
 		case call.WithOpt.Ident != nil:
-			err = checkIdentArg(scope, ast.Option, call.WithOpt.Ident)
-		case call.WithOpt.BlockLit != nil:
-			err = checkBlockLitArg(scope, ast.Option, call.WithOpt.BlockLit, call.Func.Name)
+			err = checkIdentArg(scope, parser.Option, call.WithOpt.Ident)
+		case call.WithOpt.FuncLit != nil:
+			err = checkFuncLitArg(scope, parser.Option, call.WithOpt.FuncLit, call.Func.Name)
 		default:
 			panic("unknown with opt type")
 		}
@@ -331,30 +323,30 @@ func checkCallStmt(scope *ast.Scope, typ *ast.Type, index int, call *ast.CallStm
 	return nil
 }
 
-func checkIdentArg(scope *ast.Scope, typ ast.ObjType, ident *ast.Ident) error {
+func checkIdentArg(scope *parser.Scope, typ parser.ObjType, ident *parser.Ident) error {
 	obj := scope.Lookup(ident.Name)
 	if obj == nil {
 		return ErrIdentNotDefined{ident}
 	}
 
 	switch obj.Kind {
-	case ast.DeclKind:
+	case parser.DeclKind:
 		switch n := obj.Node.(type) {
-		case *ast.FuncDecl:
+		case *parser.FuncDecl:
 			if n.Params.NumFields() > 0 {
 				return ErrFuncArg{ident}
 			}
-		case *ast.AliasDecl:
+		case *parser.AliasDecl:
 			if n.Func.Params.NumFields() > 0 {
 				return ErrFuncArg{ident}
 			}
 		default:
 			panic("unknown arg type")
 		}
-	case ast.FieldKind:
+	case parser.FieldKind:
 		var err error
 		switch d := obj.Node.(type) {
-		case *ast.Field:
+		case *parser.Field:
 			if !d.Type.Equals(typ) {
 				return ErrWrongArgType{ident.Pos, typ, d.Type.Type()}
 			}
@@ -370,17 +362,17 @@ func checkIdentArg(scope *ast.Scope, typ ast.ObjType, ident *ast.Ident) error {
 	return nil
 }
 
-func checkBasicLitArg(typ ast.ObjType, lit *ast.BasicLit) error {
+func checkBasicLitArg(typ parser.ObjType, lit *parser.BasicLit) error {
 	switch typ {
-	case ast.Str:
+	case parser.Str:
 		if lit.Str == nil {
 			return ErrWrongArgType{lit.Pos, typ, lit.ObjType()}
 		}
-	case ast.Int:
+	case parser.Int:
 		if lit.Decimal == nil && lit.Numeric == nil {
 			return ErrWrongArgType{lit.Pos, typ, lit.ObjType()}
 		}
-	case ast.Bool:
+	case parser.Bool:
 		if lit.Bool == nil {
 			return ErrWrongArgType{lit.Pos, typ, lit.ObjType()}
 		}
@@ -390,7 +382,7 @@ func checkBasicLitArg(typ ast.ObjType, lit *ast.BasicLit) error {
 	return nil
 }
 
-func checkBlockLitArg(scope *ast.Scope, typ ast.ObjType, lit *ast.BlockLit, op string) error {
+func checkFuncLitArg(scope *parser.Scope, typ parser.ObjType, lit *parser.FuncLit, op string) error {
 	if !lit.Type.Equals(typ) {
 		return ErrWrongArgType{lit.Pos, typ, lit.Type.ObjType}
 	}
@@ -398,7 +390,7 @@ func checkBlockLitArg(scope *ast.Scope, typ ast.ObjType, lit *ast.BlockLit, op s
 	return checkBlockStmt(scope, lit.Type, lit.Body, op)
 }
 
-func checkOptionBlockStmt(scope *ast.Scope, typ *ast.Type, block *ast.BlockStmt, op string) error {
+func checkOptionBlockStmt(scope *parser.Scope, typ *parser.Type, block *parser.BlockStmt, op string) error {
 	i := -1
 	for _, stmt := range block.List {
 		call := stmt.Call
@@ -407,7 +399,7 @@ func checkOptionBlockStmt(scope *ast.Scope, typ *ast.Type, block *ast.BlockStmt,
 		}
 		i++
 
-		callType := ast.NewType(ast.ObjType(fmt.Sprintf("%s::%s", ast.Option, op)))
+		callType := parser.NewType(parser.ObjType(fmt.Sprintf("%s::%s", parser.Option, op)))
 		err := checkCallStmt(scope, callType, i, call, op)
 		if err != nil {
 			return err
@@ -416,15 +408,15 @@ func checkOptionBlockStmt(scope *ast.Scope, typ *ast.Type, block *ast.BlockStmt,
 	return nil
 }
 
-func handleVariadicParams(fields []*ast.Field, args []*ast.Expr) []*ast.Field {
-	params := make([]*ast.Field, len(fields))
+func handleVariadicParams(fields []*parser.Field, args []*parser.Expr) []*parser.Field {
+	params := make([]*parser.Field, len(fields))
 	copy(params, fields)
 
 	if len(params) > 0 && params[len(params)-1].Variadic != nil {
 		variadicParam := params[len(params)-1]
 		params = params[:len(params)-1]
 		for i, _ := range args[len(params):] {
-			params = append(params, ast.NewField(variadicParam.Type.Type(), fmt.Sprintf("%s[%d]", variadicParam.Name, i), false))
+			params = append(params, parser.NewField(variadicParam.Type.Type(), fmt.Sprintf("%s[%d]", variadicParam.Name, i), false))
 		}
 	}
 

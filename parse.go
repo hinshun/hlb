@@ -6,13 +6,13 @@ import (
 
 	"github.com/alecthomas/participle/lexer"
 	"github.com/logrusorgru/aurora"
-	"github.com/openllb/hlb/ast"
+	"github.com/openllb/hlb/parser"
 	"github.com/openllb/hlb/report"
 	"golang.org/x/sync/errgroup"
 )
 
-func ParseMultiple(rs []io.Reader, opts ...ParseOption) ([]*ast.File, map[string]*report.IndexedBuffer, error) {
-	files := make([]*ast.File, len(rs))
+func ParseMultiple(rs []io.Reader, opts ...ParseOption) ([]*parser.File, map[string]*report.IndexedBuffer, error) {
+	files := make([]*parser.File, len(rs))
 	buffers := make([]*report.IndexedBuffer, len(rs))
 
 	var g errgroup.Group
@@ -43,7 +43,7 @@ func ParseMultiple(rs []io.Reader, opts ...ParseOption) ([]*ast.File, map[string
 	return files, ibs, nil
 }
 
-func Parse(r io.Reader, opts ...ParseOption) (*ast.File, *report.IndexedBuffer, error) {
+func Parse(r io.Reader, opts ...ParseOption) (*parser.File, *report.IndexedBuffer, error) {
 	info := ParseInfo{
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
@@ -65,12 +65,12 @@ func Parse(r io.Reader, opts ...ParseOption) (*ast.File, *report.IndexedBuffer, 
 	ib := report.NewIndexedBuffer()
 	r = io.TeeReader(r, ib)
 
-	lex, err := ast.Parser.Lexer().Lex(&namedReader{r, name})
+	lex, err := parser.Parser.Lexer().Lex(&namedReader{r, name})
 	if err != nil {
 		return nil, ib, err
 	}
 
-	file := &ast.File{}
+	file := &parser.File{}
 	peeker, err := lexer.Upgrade(lex)
 	if err != nil {
 		nerr, err := report.NewLexerError(info.Color, ib, peeker, err)
@@ -78,11 +78,11 @@ func Parse(r io.Reader, opts ...ParseOption) (*ast.File, *report.IndexedBuffer, 
 			return file, ib, err
 		}
 
-		ast.Parser.ParseFromLexer(peeker, file)
+		parser.Parser.ParseFromLexer(peeker, file)
 		return file, ib, nerr
 	}
 
-	err = ast.Parser.ParseFromLexer(peeker, file)
+	err = parser.Parser.ParseFromLexer(peeker, file)
 	if err != nil {
 		nerr, err := report.NewSyntaxError(info.Color, ib, peeker, err)
 		if err != nil {
