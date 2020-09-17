@@ -43,3 +43,12 @@ type ErrDeprecated struct {
 func (e ErrDeprecated) Error() string {
 	return fmt.Sprintf("%s %s", parser.FormatPos(e.Node.Position()), e.Message)
 }
+
+type ErrNonOctalFileMode struct {
+	Node        parser.Node
+	IntegerType string
+}
+
+func (e ErrNonOctalFileMode) Error() string {
+	return fmt.Sprintf("%s Using %s instead of octal (o) for file mode bits", parser.FormatPos(e.Node.Position()), e.IntegerType)
+}

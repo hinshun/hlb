@@ -616,9 +616,11 @@ func (bl *BasicLit) Kind() Kind {
 
 // NumericLit represents a number literal with a non-decimal base.
 type NumericLit struct {
-	Pos   lexer.Position
-	Value int64
-	Base  int
+	Pos        lexer.Position
+	Value      int64
+	Base       int
+	PrefixName string
+	Prefix     byte
 }
 
 func (nl *NumericLit) Position() lexer.Position { return nl.Pos }
@@ -628,13 +630,17 @@ func (nl *NumericLit) Capture(tokens []string) error {
 	base := 10
 	n := tokens[0]
 	if len(n) >= 2 {
-		switch n[1] {
+		nl.Prefix = n[1]
+		switch nl.Prefix {
 		case 'b', 'B':
 			base = 2
+			nl.PrefixName = "binary"
 		case 'o', 'O':
 			base = 8
+			nl.PrefixName = "octal"
 		case 'x', 'X':
 			base = 16
+			nl.PrefixName = "hexadecimal"
 		}
 		n = n[2:]
 	}

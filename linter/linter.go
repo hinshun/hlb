@@ -2,6 +2,7 @@ package linter
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/openllb/hlb/checker"
@@ -68,6 +69,18 @@ func (l *Linter) Lint(mod *parser.Module) error {
 				}
 			}
 		},
+		func(call *parser.CallStmt) {
+			err := l.lintCall(call.Name, call.Args)
+			if err != nil {
+				errs = append(errs, err)
+			}
+		},
+		func(call *parser.CallExpr) {
+			err := l.lintCall(call.Name, call.Args())
+			if err != nil {
+				errs = append(errs, err)
+			}
+		},
 	)
 	if modErr != nil {
 		return modErr
@@ -116,4 +129,52 @@ func (l *Linter) LintRecursive(mod *parser.Module, expr *parser.Expr) error {
 	}
 
 	return l.Lint(imod)
+}
+
+func (l *Linter) lintCall(name *parser.IdentExpr, args []*parser.Expr) error {
+	if name.Reference != nil {
+		return nil
+	}
+	switch name.Ident.Text {
+	case "chmod":
+		if len(args) < 1 {
+			return nil
+		}
+		return l.lintFileMode(args[0])
+	case "mode":
+		if len(args) < 1 {
+			return nil
+		}
+		return l.lintFileMode(args[0])
+	case "mkdir":
+		if len(args) < 2 {
+			return nil
+		}
+		return l.lintFileMode(args[1])
+	case "mkfile":
+		if len(args) < 2 {
+			return nil
+		}
+		return l.lintFileMode(args[1])
+	}
+	return nil
+}
+
+func (l *Linter) lintFileMode(expr *parser.Expr) error {
+	if expr.BasicLit == nil {
+		return nil
+	}
+
+	switch {
+	case expr.BasicLit.Decimal != nil:
+		return ErrNonOctalFileMode{Node: expr, IntegerType: "decimal"}
+	case expr.BasicLit.Numeric != nil:
+		nl := expr.BasicLit.Numeric
+		if nl.Base == 8 {
+			return nil
+		}
+
+		return ErrNonOctalFileMode{Node: expr, IntegerType: fmt.Sprintf("%s (%s)", nl.PrefixName, string(nl.Prefix))}
+	}
+	return nil
 }
