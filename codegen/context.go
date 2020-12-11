@@ -4,7 +4,6 @@ import (
 	"context"
 	"path/filepath"
 
-	"github.com/docker/buildx/util/progress"
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/solver/errdefs"
@@ -23,7 +22,6 @@ type (
 	argKey            struct{ n int }
 	bindingKey        struct{}
 	sessionIDKey      struct{}
-	multiwriterKey    struct{}
 	imageResolverKey  struct{}
 	backtraceKey      struct{}
 )
@@ -85,15 +83,6 @@ func WithSessionID(ctx context.Context, sessionID string) context.Context {
 func SessionID(ctx context.Context) string {
 	sessionID, _ := ctx.Value(sessionIDKey{}).(string)
 	return sessionID
-}
-
-func WithMultiWriter(ctx context.Context, mw *progress.MultiWriter) context.Context {
-	return context.WithValue(ctx, multiwriterKey{}, mw)
-}
-
-func MultiWriter(ctx context.Context) *progress.MultiWriter {
-	mw, _ := ctx.Value(multiwriterKey{}).(*progress.MultiWriter)
-	return mw
 }
 
 func WithImageResolver(ctx context.Context, resolver llb.ImageMetaResolver) context.Context {

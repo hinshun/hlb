@@ -10,9 +10,11 @@ import (
 
 	"github.com/lithammer/dedent"
 	"github.com/moby/buildkit/client"
+	"github.com/moby/buildkit/solver/pb"
 	"github.com/openllb/hlb/errdefs"
 	"github.com/openllb/hlb/parser"
 	"github.com/openllb/hlb/solver"
+	"github.com/openllb/hlb/solver/progress"
 	"github.com/pkg/errors"
 )
 
@@ -361,6 +363,40 @@ func (cg *CodeGen) EmitBuiltinDecl(ctx context.Context, scope *parser.Scope, bd 
 	if !outs[0].IsNil() {
 		return WithBacktraceError(ctx, outs[0].Interface().(error))
 	}
+
+	if ret.Kind() == parser.Filesystem {
+		job := progress.GetJob(ctx)
+		if job != nil {
+			fs, err := ret.Filesystem()
+			if err != nil {
+				return err
+			}
+
+			fs.SolveOpts = append(fs.SolveOpts, solver.WithJob(job))
+			err = ret.Set(fs)
+			if err != nil {
+				return err
+			}
+
+			def, err := fs.State.Marshal(ctx)
+			if err != nil {
+				return err
+			}
+
+			if len(def.Def) > 0 {
+				var op pb.Op
+				dt := def.Def[len(def.Def)-1]
+				err = (&op).Unmarshal(dt)
+				if err != nil {
+					return err
+				}
+
+				id := op.Inputs[0].Digest.String()
+				_ = job.NewTask(id)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -388,6 +424,29 @@ func (cg *CodeGen) EmitFuncDecl(ctx context.Context, fun *parser.FuncDecl, args 
 			Node:  param,
 			Data:  args[i],
 		})
+	}
+
+	kind := fun.Kind()
+	if b != nil {
+		kind = b.Field.Kind()
+	}
+
+	pm := progress.GetManager(ctx)
+	if pm != nil && kind == parser.Filesystem {
+		// The IdentExpr is more contextual than the function name, so if its
+		// available, use it to construct the progress job name.
+		var name string
+		frames := Backtrace(ctx)
+		if len(frames) == 0 {
+			name = fun.Name.String()
+		} else {
+			// The last frame contains the IdentExpr to invoke this function.
+			lastFrame := frames[len(frames)-1]
+			name = lastFrame.String()
+		}
+
+		job := pm.NewJob(name)
+		ctx = progress.WithJob(ctx, job)
 	}
 
 	// Yield before executing a function.

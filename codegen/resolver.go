@@ -4,13 +4,13 @@ import (
 	"context"
 	"sync"
 
-	"github.com/docker/buildx/util/progress"
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/client/llb"
 	gateway "github.com/moby/buildkit/frontend/gateway/client"
 	digest "github.com/opencontainers/go-digest"
 	"github.com/openllb/hlb/pkg/llbutil"
 	"github.com/openllb/hlb/solver"
+	"github.com/openllb/hlb/solver/progress"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -52,17 +52,10 @@ func (r *cachedImageResolver) ResolveImageConfig(ctx context.Context, ref string
 	})
 
 	g.Go(func() error {
-		var pw progress.Writer
-
-		mw := MultiWriter(ctx)
-		if mw != nil {
-			pw = mw.WithPrefix("", false)
-		}
-
-		return solver.Build(ctx, r.cln, s, pw, func(ctx context.Context, c gateway.Client) (res *gateway.Result, err error) {
+		return solver.Build(ctx, r.cln, s, func(ctx context.Context, c gateway.Client) (res *gateway.Result, err error) {
 			dgst, config, err = c.ResolveImageConfig(ctx, ref, opt)
 			return gateway.NewResult(), err
-		})
+		}, solver.WithJob(progress.GetJob(ctx)))
 	})
 
 	err = g.Wait()

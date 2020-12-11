@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/docker/buildx/util/progress"
 	"github.com/kballard/go-shellquote"
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/client/llb"
@@ -28,10 +27,8 @@ const (
 // next nodes that should be executed sequentially. These can be intermingled
 // to produce a complex build pipeline.
 type Request interface {
-	// Solve sends the request and its children to BuildKit. The request passes
-	// down the progress.MultiWriter for them to spawn their own progress writers
-	// for each independent solve.
-	Solve(ctx context.Context, cln *client.Client, mw *progress.MultiWriter) error
+	// Solve sends the request and its children to BuildKit.
+	Solve(ctx context.Context, cln *client.Client) error
 
 	Tree(tree treeprint.Tree) error
 }
@@ -42,7 +39,7 @@ func NilRequest() Request {
 	return &nilRequest{}
 }
 
-func (r *nilRequest) Solve(ctx context.Context, cln *client.Client, mw *progress.MultiWriter) error {
+func (r *nilRequest) Solve(ctx context.Context, cln *client.Client) error {
 	return nil
 }
 
@@ -65,12 +62,7 @@ func Single(params *Params) Request {
 	return &singleRequest{params: params}
 }
 
-func (r *singleRequest) Solve(ctx context.Context, cln *client.Client, mw *progress.MultiWriter) error {
-	var pw progress.Writer
-	if mw != nil {
-		pw = mw.WithPrefix("", false)
-	}
-
+func (r *singleRequest) Solve(ctx context.Context, cln *client.Client) error {
 	s, err := llbutil.NewSession(ctx, r.params.SessionOpts...)
 	if err != nil {
 		return err
@@ -83,7 +75,7 @@ func (r *singleRequest) Solve(ctx context.Context, cln *client.Client, mw *progr
 	})
 
 	g.Go(func() error {
-		return Solve(ctx, cln, s, pw, r.params.Def, r.params.SolveOpts...)
+		return Solve(ctx, cln, s, r.params.Def, r.params.SolveOpts...)
 	})
 
 	return g.Wait()
@@ -292,12 +284,12 @@ func Parallel(candidates ...Request) Request {
 	return &parallelRequest{reqs: reqs}
 }
 
-func (r *parallelRequest) Solve(ctx context.Context, cln *client.Client, mw *progress.MultiWriter) error {
+func (r *parallelRequest) Solve(ctx context.Context, cln *client.Client) error {
 	g, ctx := errgroup.WithContext(ctx)
 	for _, req := range r.reqs {
 		req := req
 		g.Go(func() error {
-			return req.Solve(ctx, cln, mw)
+			return req.Solve(ctx, cln)
 		})
 	}
 	return g.Wait()
@@ -338,9 +330,9 @@ func Sequential(candidates ...Request) Request {
 	return &sequentialRequest{reqs: reqs}
 }
 
-func (r *sequentialRequest) Solve(ctx context.Context, cln *client.Client, mw *progress.MultiWriter) error {
+func (r *sequentialRequest) Solve(ctx context.Context, cln *client.Client) error {
 	for _, req := range r.reqs {
-		err := req.Solve(ctx, cln, mw)
+		err := req.Solve(ctx, cln)
 		if err != nil {
 			return err
 		}

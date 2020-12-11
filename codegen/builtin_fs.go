@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/docker/buildx/util/progress"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
 	"github.com/docker/distribution/reference"
@@ -27,6 +26,7 @@ import (
 	"github.com/openllb/hlb/parser"
 	"github.com/openllb/hlb/pkg/llbutil"
 	"github.com/openllb/hlb/solver"
+	"github.com/openllb/hlb/solver/progress"
 	fstypes "github.com/tonistiigi/fsutil/types"
 	"golang.org/x/sync/errgroup"
 )
@@ -223,14 +223,7 @@ func (f Frontend) Call(ctx context.Context, cln *client.Client, ret Register, op
 	}
 
 	g.Go(func() error {
-		var pw progress.Writer
-
-		mw := MultiWriter(ctx)
-		if mw != nil {
-			pw = mw.WithPrefix("", false)
-		}
-
-		return solver.Build(ctx, cln, s, pw, func(ctx context.Context, c gateway.Client) (res *gateway.Result, err error) {
+		return solver.Build(ctx, cln, s, func(ctx context.Context, c gateway.Client) (res *gateway.Result, err error) {
 			res, err = c.Solve(ctx, req)
 			if err != nil {
 				return
@@ -552,6 +545,7 @@ func (dp DockerPush) Call(ctx context.Context, cln *client.Client, ret Register,
 
 	var dgst string
 	exportFS.SolveOpts = append(exportFS.SolveOpts,
+		solver.WithNoStatus(),
 		solver.WithImageSpec(exportFS.Image),
 		solver.WithPushImage(ref),
 		solver.WithCallback(func(_ context.Context, resp *client.SolveResponse) error {
@@ -573,7 +567,7 @@ func (dp DockerPush) Call(ctx context.Context, cln *client.Client, ret Register,
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
-		return request.Solve(ctx, cln, MultiWriter(ctx))
+		return request.Solve(ctx, cln)
 	})
 
 	if Binding(ctx).Binds() == "digest" {
@@ -613,6 +607,7 @@ func (dl DockerLoad) Call(ctx context.Context, cln *client.Client, ret Register,
 	}
 
 	exportFS.SolveOpts = append(exportFS.SolveOpts,
+		solver.WithNoStatus(),
 		solver.WithImageSpec(exportFS.Image),
 		solver.WithDownloadDockerTarball(ref),
 	)
@@ -633,7 +628,7 @@ func (dl DockerLoad) Call(ctx context.Context, cln *client.Client, ret Register,
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
-		return request.Solve(ctx, cln, MultiWriter(ctx))
+		return request.Solve(ctx, cln)
 	})
 
 	g.Go(func() (err error) {
@@ -669,15 +664,15 @@ func (dl DockerLoad) Call(ctx context.Context, cln *client.Client, ret Register,
 		}
 		defer resp.Body.Close()
 
-		mw := MultiWriter(ctx)
-		if mw == nil {
+		pm := progress.GetManager(ctx)
+		if pm == nil {
 			_, err = io.Copy(ioutil.Discard, resp.Body)
 			return err
 		}
 
-		pw := mw.WithPrefix("", false)
-		progress.FromReader(pw, fmt.Sprintf("importing %s to docker", ref), resp.Body)
-		return nil
+		// progress.FromReader(pm.Writer(), fmt.Sprintf("importing %s to docker", ref), resp.Body)
+		_, err = io.Copy(ioutil.Discard, resp.Body)
+		return err
 	})
 
 	fs, err := ret.Filesystem()
@@ -703,7 +698,11 @@ func (d Download) Call(ctx context.Context, cln *client.Client, ret Register, op
 		return err
 	}
 
-	exportFS.SolveOpts = append(exportFS.SolveOpts, solver.WithDownload(localPath))
+	exportFS.SolveOpts = append(exportFS.SolveOpts,
+		solver.WithNoStatus(),
+		solver.WithDownload(localPath),
+	)
+
 	exportFS.SessionOpts = append(exportFS.SessionOpts, llbutil.WithSyncTargetDir(localPath))
 
 	v, err := NewValue(exportFS)
@@ -719,7 +718,7 @@ func (d Download) Call(ctx context.Context, cln *client.Client, ret Register, op
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
-		return request.Solve(ctx, cln, MultiWriter(ctx))
+		return request.Solve(ctx, cln)
 	})
 
 	fs, err := ret.Filesystem()
@@ -755,7 +754,11 @@ func (dt DownloadTarball) Call(ctx context.Context, cln *client.Client, ret Regi
 		return err
 	}
 
-	exportFS.SolveOpts = append(exportFS.SolveOpts, solver.WithDownloadTarball())
+	exportFS.SolveOpts = append(exportFS.SolveOpts,
+		solver.WithNoStatus(),
+		solver.WithDownloadTarball(),
+	)
+
 	exportFS.SessionOpts = append(exportFS.SessionOpts, llbutil.WithSyncTarget(llbutil.OutputFromWriter(f)))
 
 	v, err := NewValue(exportFS)
@@ -771,7 +774,7 @@ func (dt DownloadTarball) Call(ctx context.Context, cln *client.Client, ret Regi
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
-		return request.Solve(ctx, cln, MultiWriter(ctx))
+		return request.Solve(ctx, cln)
 	})
 
 	fs, err := ret.Filesystem()
@@ -807,7 +810,11 @@ func (dot DownloadOCITarball) Call(ctx context.Context, cln *client.Client, ret 
 		return err
 	}
 
-	exportFS.SolveOpts = append(exportFS.SolveOpts, solver.WithDownloadOCITarball())
+	exportFS.SolveOpts = append(exportFS.SolveOpts,
+		solver.WithNoStatus(),
+		solver.WithDownloadOCITarball(),
+	)
+
 	exportFS.SessionOpts = append(exportFS.SessionOpts, llbutil.WithSyncTarget(llbutil.OutputFromWriter(f)))
 
 	v, err := NewValue(exportFS)
@@ -823,7 +830,7 @@ func (dot DownloadOCITarball) Call(ctx context.Context, cln *client.Client, ret 
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
-		return request.Solve(ctx, cln, MultiWriter(ctx))
+		return request.Solve(ctx, cln)
 	})
 
 	fs, err := ret.Filesystem()
@@ -860,6 +867,7 @@ func (dot DownloadDockerTarball) Call(ctx context.Context, cln *client.Client, r
 	}
 
 	exportFS.SolveOpts = append(exportFS.SolveOpts,
+		solver.WithNoStatus(),
 		solver.WithImageSpec(exportFS.Image),
 		solver.WithDownloadDockerTarball(ref),
 	)
@@ -878,7 +886,7 @@ func (dot DownloadDockerTarball) Call(ctx context.Context, cln *client.Client, r
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
-		return request.Solve(ctx, cln, MultiWriter(ctx))
+		return request.Solve(ctx, cln)
 	})
 
 	fs, err := ret.Filesystem()

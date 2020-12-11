@@ -11,13 +11,11 @@ import (
 	"github.com/moby/buildkit/client"
 	"github.com/openllb/hlb/builtin"
 	"github.com/openllb/hlb/checker"
-	"github.com/openllb/hlb/codegen"
 	"github.com/openllb/hlb/diagnostic"
 	"github.com/openllb/hlb/errdefs"
 	"github.com/openllb/hlb/linter"
 	"github.com/openllb/hlb/module"
 	"github.com/openllb/hlb/parser"
-	"github.com/openllb/hlb/solver"
 	cli "github.com/urfave/cli/v2"
 	"github.com/xlab/treeprint"
 )
@@ -167,18 +165,7 @@ func Vendor(ctx context.Context, cln *client.Client, info VendorInfo) (err error
 		return nil
 	}
 
-	p, err := solver.NewProgress(ctx)
-	if err != nil {
-		return err
-	}
-
-	p.Go(func(ctx context.Context) error {
-		defer p.Release()
-		ctx = codegen.WithMultiWriter(ctx, p.MultiWriter())
-		return module.Vendor(ctx, cln, mod, info.Targets, info.Tidy)
-	})
-
-	return p.Wait()
+	return module.Vendor(ctx, cln, mod, info.Targets, info.Tidy)
 }
 
 func findVendoredModule(errNotExist error, name string) (io.ReadCloser, error) {
@@ -281,21 +268,7 @@ func Tree(ctx context.Context, cln *client.Client, info TreeInfo) (err error) {
 			return err
 		}
 	} else {
-		p, err := solver.NewProgress(ctx)
-		if err != nil {
-			return err
-		}
-
-		p.Go(func(ctx context.Context) error {
-			defer p.Release()
-
-			var err error
-			ctx = codegen.WithMultiWriter(ctx, p.MultiWriter())
-			tree, err = module.NewTree(ctx, cln, mod, info.Long)
-			return err
-		})
-
-		err = p.Wait()
+		tree, err = module.NewTree(ctx, cln, mod, info.Long)
 		if err != nil {
 			return err
 		}

@@ -4,10 +4,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"strings"
 
-	"github.com/mattn/go-isatty"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/moby/buildkit/client"
 	"github.com/openllb/hlb"
 	"github.com/openllb/hlb/builtin"
@@ -16,9 +17,9 @@ import (
 	"github.com/openllb/hlb/errdefs"
 	"github.com/openllb/hlb/local"
 	"github.com/openllb/hlb/parser"
-	"github.com/openllb/hlb/solver"
+	"github.com/openllb/hlb/solver/progress"
+	"github.com/openllb/hlb/tui"
 	cli "github.com/urfave/cli/v2"
-	"github.com/xlab/treeprint"
 )
 
 var (
@@ -67,6 +68,15 @@ var runCommand = &cli.Command{
 			return err
 		}
 
+		// TODO: remove debugging block
+		f, err := os.Create("/tmp/hlb.log")
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		log.SetOutput(f)
+		// TODO: remove debugging block
+
 		return Run(ctx, cln, rc, RunInfo{
 			Debug:     c.Bool("debug"),
 			Tree:      c.Bool("tree"),
@@ -113,38 +123,28 @@ func Run(ctx context.Context, cln *client.Client, rc io.ReadCloser, info RunInfo
 	ctx = local.WithOs(ctx, info.Os)
 	ctx = local.WithArch(ctx, info.Arch)
 
-	var progressOpts []solver.ProgressOption
-	if info.LogOutput == "" || info.LogOutput == "auto" {
-		// assume plain output, will upgrade if we detect tty
-		info.LogOutput = "plain"
-		if fdAble, ok := info.Output.(interface{ Fd() uintptr }); ok {
-			if isatty.IsTerminal(fdAble.Fd()) {
-				info.LogOutput = "tty"
-			}
-		}
-	}
+	// var progressOpts []solver.ProgressOption
+	// if info.LogOutput == "" || info.LogOutput == "auto" {
+	// 	// assume plain output, will upgrade if we detect tty
+	// 	info.LogOutput = "plain"
+	// 	if fdAble, ok := info.Output.(interface{ Fd() uintptr }); ok {
+	// 		if isatty.IsTerminal(fdAble.Fd()) {
+	// 			info.LogOutput = "tty"
+	// 		}
+	// 	}
+	// }
 
-	switch info.LogOutput {
-	case "tty":
-		progressOpts = append(progressOpts, solver.WithLogOutput(solver.LogOutputTTY))
-	case "plain":
-		progressOpts = append(progressOpts, solver.WithLogOutput(solver.LogOutputPlain))
-	default:
-		return fmt.Errorf("unrecognized log-output %q", info.LogOutput)
-	}
+	// switch info.LogOutput {
+	// case "tty":
+	// 	progressOpts = append(progressOpts, solver.WithLogOutput(solver.LogOutputTTY))
+	// case "plain":
+	// 	progressOpts = append(progressOpts, solver.WithLogOutput(solver.LogOutputPlain))
+	// default:
+	// 	return fmt.Errorf("unrecognized log-output %q", info.LogOutput)
+	// }
 
-	var p solver.Progress
-	if info.Debug {
-		p = solver.NewDebugProgress(ctx)
-	} else {
-		var err error
-		p, err = solver.NewProgress(ctx, progressOpts...)
-		if err != nil {
-			return err
-		}
-		ctx = codegen.WithMultiWriter(ctx, p.MultiWriter())
-	}
-
+	pm := progress.NewManager(ctx)
+	ctx = progress.WithManager(ctx, pm)
 	ctx = diagnostic.WithSources(ctx, builtin.Sources())
 
 	defer func() {
@@ -157,7 +157,7 @@ func Run(ctx context.Context, cln *client.Client, rc io.ReadCloser, info RunInfo
 		if len(backtrace) > 0 {
 			color := diagnostic.Color(ctx)
 			fmt.Fprintf(info.ErrOutput, color.Sprintf(
-				"%s: %s\n",
+				"\n%s: %s\n",
 				color.Bold(color.Red("error")),
 				color.Bold(diagnostic.Cause(err)),
 			))
@@ -192,7 +192,7 @@ func Run(ctx context.Context, cln *client.Client, rc io.ReadCloser, info RunInfo
 			// Handle diagnostic errors.
 			spans := diagnostic.Spans(err)
 			for _, span := range spans {
-				fmt.Fprintf(info.ErrOutput, "%s\n", span.Pretty(ctx))
+				fmt.Fprintf(info.ErrOutput, "\n%s\n", span.Pretty(ctx))
 			}
 			numErrs = len(spans)
 		} else {
@@ -212,45 +212,57 @@ func Run(ctx context.Context, cln *client.Client, rc io.ReadCloser, info RunInfo
 		targets = append(targets, codegen.Target{Name: target})
 	}
 
+	done := make(chan struct{})
+	defer func() { <-done }()
+
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithCancel(ctx)
+
+	go func() {
+		defer close(done)
+
+		t, err := tui.New(ctx, cancel, pm)
+		if err != nil {
+			return
+			panic(err)
+		}
+
+		p := tea.NewProgram(t)
+		p.EnableMouseCellMotion()
+		defer p.DisableMouseCellMotion()
+
+		err = p.Start()
+		if err != nil {
+			panic(err)
+		}
+	}()
+
 	ctx = codegen.WithImageResolver(ctx, codegen.NewCachedImageResolver(cln))
-	solveReq, err := hlb.Compile(ctx, cln, mod, targets)
-	if err != nil {
-		// Ignore early exits from the debugger.
-		if err == codegen.ErrDebugExit {
-			return nil
-		}
-		return err
-	}
 
-	if solveReq == nil || info.Debug || info.Tree {
-		p.Release()
-		err = p.Wait()
+	pm.Go(func() error {
+		defer pm.Release()
+
+		solveReq, err := hlb.Compile(ctx, cln, mod, targets)
 		if err != nil {
+			// Ignore early exits from the debugger.
+			if err == codegen.ErrDebugExit {
+				return nil
+			}
 			return err
 		}
 
-		if solveReq == nil || info.Debug {
+		if solveReq == nil {
 			return nil
 		}
-	}
 
-	if info.Tree {
-		tree := treeprint.New()
-		err = solveReq.Tree(tree)
-		if err != nil {
-			return err
-		}
-
-		fmt.Println(tree)
-		return nil
-	}
-
-	p.Go(func(ctx context.Context) error {
-		defer p.Release()
-		return solveReq.Solve(ctx, cln, p.MultiWriter())
+		log.Println("[solver] solving")
+		defer func() {
+			log.Println("[solver] finished solving")
+		}()
+		return solveReq.Solve(ctx, cln)
 	})
 
-	return p.Wait()
+	return pm.Wait()
 }
 
 func ModuleReadCloser(args []string) (io.ReadCloser, error) {

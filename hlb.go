@@ -15,6 +15,7 @@ import (
 	"github.com/openllb/hlb/module"
 	"github.com/openllb/hlb/parser"
 	"github.com/openllb/hlb/solver"
+	"github.com/openllb/hlb/solver/progress"
 )
 
 func Compile(ctx context.Context, cln *client.Client, mod *parser.Module, targets []codegen.Target) (solver.Request, error) {
@@ -52,7 +53,7 @@ func Compile(ctx context.Context, cln *client.Client, mod *parser.Module, target
 	}
 
 	var opts []codegen.CodeGenOption
-	if codegen.MultiWriter(ctx) == nil {
+	if progress.GetManager(ctx) == nil {
 		r := bufio.NewReader(os.Stdin)
 		opts = append(opts, codegen.WithDebugger(codegen.NewDebugger(cln, os.Stderr, r)))
 	}

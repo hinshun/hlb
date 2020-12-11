@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/docker/buildx/util/progress"
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/client/llb"
 	gateway "github.com/moby/buildkit/frontend/gateway/client"
@@ -171,12 +170,6 @@ func (r *remoteResolver) Resolve(ctx context.Context, id *parser.ImportDecl, fs 
 		return nil, err
 	}
 
-	var pw progress.Writer
-	mw := codegen.MultiWriter(ctx)
-	if mw != nil {
-		pw = mw.WithPrefix(fmt.Sprintf("import %s", id.Name), true)
-	}
-
 	// Block constructing remoteResolved until the graph is solved and assigned to
 	// ref.
 	resolved := make(chan struct{})
@@ -199,7 +192,7 @@ func (r *remoteResolver) Resolve(ctx context.Context, id *parser.ImportDecl, fs 
 
 	var ref gateway.Reference
 	g.Go(func() error {
-		return solver.Build(ctx, r.cln, s, pw, func(ctx context.Context, c gateway.Client) (*gateway.Result, error) {
+		return solver.Build(ctx, r.cln, s, func(ctx context.Context, c gateway.Client) (*gateway.Result, error) {
 			res, err := c.Solve(ctx, gateway.SolveRequest{
 				Definition: def.ToPB(),
 			})

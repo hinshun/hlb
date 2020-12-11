@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/docker/buildx/util/progress"
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/exporter/containerimage/exptypes"
@@ -12,6 +11,7 @@ import (
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/util/entitlements"
 	specs "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/openllb/hlb/solver/progress"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -20,6 +20,8 @@ type SolveOption func(*SolveInfo) error
 type SolveCallback func(ctx context.Context, resp *client.SolveResponse) error
 
 type SolveInfo struct {
+	NoStatus              bool
+	Job                   progress.Job
 	OutputDockerRef       string
 	OutputPushImage       string
 	OutputLocal           string
@@ -28,6 +30,20 @@ type SolveInfo struct {
 	Callbacks             []SolveCallback `json:"-"`
 	ImageSpec             *specs.Image
 	Entitlements          []entitlements.Entitlement
+}
+
+func WithJob(job progress.Job) SolveOption {
+	return func(info *SolveInfo) error {
+		info.Job = job
+		return nil
+	}
+}
+
+func WithNoStatus() SolveOption {
+	return func(info *SolveInfo) error {
+		info.NoStatus = true
+		return nil
+	}
 }
 
 func WithDownloadDockerTarball(ref string) SolveOption {
@@ -86,7 +102,7 @@ func WithEntitlement(e entitlements.Entitlement) SolveOption {
 	}
 }
 
-func Solve(ctx context.Context, c *client.Client, s *session.Session, pw progress.Writer, def *llb.Definition, opts ...SolveOption) error {
+func Solve(ctx context.Context, c *client.Client, s *session.Session, def *llb.Definition, opts ...SolveOption) error {
 	info := &SolveInfo{}
 	for _, opt := range opts {
 		err := opt(info)
@@ -95,7 +111,7 @@ func Solve(ctx context.Context, c *client.Client, s *session.Session, pw progres
 		}
 	}
 
-	return Build(ctx, c, s, pw, func(ctx context.Context, c gateway.Client) (*gateway.Result, error) {
+	return Build(ctx, c, s, func(ctx context.Context, c gateway.Client) (*gateway.Result, error) {
 		res, err := c.Solve(ctx, gateway.SolveRequest{
 			Definition: def.ToPB(),
 		})
@@ -115,7 +131,7 @@ func Solve(ctx context.Context, c *client.Client, s *session.Session, pw progres
 	}, opts...)
 }
 
-func Build(ctx context.Context, c *client.Client, s *session.Session, pw progress.Writer, f gateway.BuildFunc, opts ...SolveOption) error {
+func Build(ctx context.Context, c *client.Client, s *session.Session, f gateway.BuildFunc, opts ...SolveOption) error {
 	info := &SolveInfo{}
 	for _, opt := range opts {
 		err := opt(info)
@@ -168,13 +184,11 @@ func Build(ctx context.Context, c *client.Client, s *session.Session, pw progres
 		})
 	}
 
-	var (
-		statusCh chan *client.SolveStatus
-		resp     *client.SolveResponse
-	)
-	if pw != nil {
-		pw = progress.ResetTime(pw)
-		statusCh = pw.Status()
+	var statusCh chan *client.SolveStatus
+	if !info.NoStatus {
+		if info.Job != nil {
+			statusCh = info.Job.NewChannel()
+		}
 	}
 
 	resp, err := c.Build(ctx, solveOpt, "", f, statusCh)
